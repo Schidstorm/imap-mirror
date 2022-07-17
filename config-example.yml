@@ -1,0 +1,8 @@
+imapAddr:     ""
+imapUsername: ""
+imapPassword: ""
+cifsAddr:     ""
+cifsUsername: ""
+cifsPassword: ""
+cifsShare:    ""
+backupDir:    ""
