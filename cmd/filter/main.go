@@ -4,8 +4,8 @@ import (
 	"os"
 
 	"git.schidlow.ski/gitea/imap-mirror/pkg/cifs"
-	imap_backup "git.schidlow.ski/gitea/imap-mirror/pkg/imap-backup"
 	imapclient "git.schidlow.ski/gitea/imap-mirror/pkg/imap-client"
+	imap_filter "git.schidlow.ski/gitea/imap-mirror/pkg/imap-filter"
 	"git.schidlow.ski/gitea/imap-mirror/pkg/log"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -13,9 +13,9 @@ import (
 )
 
 type Config struct {
-	ClientConfig imapclient.Config  `json:",inline" yaml:",inline"`
-	CifsConfig   cifs.Config        `json:",inline" yaml:",inline"`
-	BackupConfig imap_backup.Config `json:",inline" yaml:",inline"`
+	ClientConfig    imapclient.Config           `json:",inline" yaml:",inline"`
+	CifsConfig      cifs.Config                 `json:",inline" yaml:",inline"`
+	LuaFilterConfig imap_filter.LuaFilterConfig `json:",inline" yaml:",inline"`
 }
 
 func main() {
@@ -49,10 +49,19 @@ func main() {
 			}
 			defer cifsShare.Close()
 
-			backupClient := imap_backup.NewImapBackup(cifsShare, cfg.BackupConfig)
+			filterClient := imap_filter.NewFilterClient(
+				imap_filter.NewLuaFilter(cfg.LuaFilterConfig, func(dir string) ([]string, error) {
+					return cifsShare.ListFiles(dir)
+				}, func(file string) (string, error) {
+					return cifsShare.ReadFile(file)
+				}),
+			)
 
-			client := imapclient.NewClient(cifsShare, cfg.ClientConfig, []imapclient.Plugin{backupClient})
+			client := imapclient.NewClient(cifsShare, cfg.ClientConfig, []imapclient.Plugin{filterClient})
+			defer client.Close()
 			err = client.Run(log.Log())
+
+			filterClient.ProcessDeletions(client.GetImapClient())
 
 			if err != nil {
 				log.Log().Error(err)
@@ -73,7 +82,7 @@ func main() {
 					ImapAddr:     "imap.example.com:993",
 					ImapUsername: "user",
 					ImapPassword: "password",
-					StateDir:     "backup",
+					StateDir:     "filter",
 				},
 				CifsConfig: cifs.Config{
 					CifsAddr:     "cifs.example.com:445",
@@ -81,8 +90,8 @@ func main() {
 					CifsPassword: "password",
 					CifsShare:    "share",
 				},
-				BackupConfig: imap_backup.Config{
-					BackupDir: "backup",
+				LuaFilterConfig: imap_filter.LuaFilterConfig{
+					ScriptsDir: "scripts",
 				},
 			}
 

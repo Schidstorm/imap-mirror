@@ -2,12 +2,18 @@ package imap_client
 
 import "C"
 import (
-	"github.com/emersion/go-imap"
-	"github.com/emersion/go-imap/client"
-	"github.com/sirupsen/logrus"
+	"fmt"
+	"io"
 	"os"
 	"path"
+	"reflect"
+	"slices"
 	"time"
+
+	"github.com/emersion/go-imap"
+	"github.com/emersion/go-imap/client"
+	"github.com/hack-pad/hackpadfs"
+	"github.com/sirupsen/logrus"
 )
 
 const FetchBatchSize = 100
@@ -20,24 +26,77 @@ var FetchItems = []imap.FetchItem{
 	FetchBodySection.FetchItem(),
 }
 
-type Client struct {
-	imapClient *client.Client
-	log        *logrus.Logger
-	config     Config
-	state      *State
-	cifsShare  CifsShare
+type Plugin interface {
+	Init(log *logrus.Logger, client *client.Client) error
 }
 
-func (c *Client) Open(log *logrus.Logger, config Config) error {
+type HandleMessagePlugin interface {
+	HandleMessage(mailbox string, message *imap.Message)
+}
+
+type SelectMailboxesPlugin interface {
+	SelectMailboxes() []string
+}
+
+type FS interface {
+	hackpadfs.FS
+	hackpadfs.OpenFileFS
+	hackpadfs.MkdirAllFS
+	hackpadfs.StatFS
+	hackpadfs.RenameFS
+}
+
+type Config struct {
+	ImapAddr          string  `json:"imapAddr" yaml:"imapAddr"`
+	ImapUsername      string  `json:"imapUsername" yaml:"imapUsername"`
+	ImapPassword      string  `json:"imapPassword" yaml:"imapPassword"`
+	StateDir          string  `json:"stateDir" yaml:"stateDir"`
+	StateFile         *string `json:"stateFile" yaml:"stateFile"`
+	LastMessageOffset uint32  `json:"lastMessageOffset" yaml:"lastMessageOffset"`
+}
+
+type Client struct {
+	imapClient        *client.Client
+	log               *logrus.Logger
+	config            Config
+	plugins           []Plugin
+	state             *State
+	stateFS           FS
+	stateDirectory    string
+	lastMessageOffset uint32
+	stateFile         string
+}
+
+func NewClient(stateFS FS, cfg Config, messageHandlers []Plugin) *Client {
+	stateFile := ".state.json"
+	if cfg.StateFile != nil {
+		stateFile = *cfg.StateFile
+	}
+
+	return &Client{
+		stateFS:           stateFS,
+		stateDirectory:    cfg.StateDir,
+		state:             NewState(),
+		config:            cfg,
+		plugins:           messageHandlers,
+		lastMessageOffset: cfg.LastMessageOffset,
+		stateFile:         stateFile,
+	}
+}
+
+func (c Client) GetImapClient() *client.Client {
+	return c.imapClient
+}
+
+func (c *Client) open(log *logrus.Logger) error {
 	c.log = log
-	c.config = config
 
 	if c.imapClient != nil {
 		c.imapClient.Close()
 		c.imapClient.Logout()
 	}
 
-	imapClient, err := client.DialTLS(config.ImapAddr, nil)
+	imapClient, err := client.DialTLS(c.config.ImapAddr, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -45,78 +104,65 @@ func (c *Client) Open(log *logrus.Logger, config Config) error {
 	log.Info("connected")
 
 	// Login
-	if err := imapClient.Login(config.ImapUsername, config.ImapPassword); err != nil {
+	if err := imapClient.Login(c.config.ImapUsername, c.config.ImapPassword); err != nil {
 		return err
 	}
 	log.Info("logged in")
 
-	c.cifsShare, err = OpenCifsShare(config)
-	if err != nil {
-		return err
+	var removePlugins []int
+	for i, plugin := range c.plugins {
+		err := plugin.Init(log, imapClient)
+		if err != nil {
+			log.WithError(err).WithField("plugin", reflect.TypeOf(plugin).String()).Error("failed to init plugin. removing plugin from list.")
+			removePlugins = append(removePlugins, i)
+			continue
+		}
 	}
-	log.Info("cifs connected")
+
+	for _, i := range removePlugins {
+		c.plugins = append(c.plugins[:i], c.plugins[i+1:]...)
+	}
 
 	return nil
 }
 
 func (c *Client) Close() error {
+	for _, plugin := range c.plugins {
+		if closer, ok := plugin.(io.Closer); ok {
+			closer.Close()
+		}
+	}
+
 	if c.imapClient != nil {
 		c.imapClient.Logout()
 		c.imapClient.Close()
 	}
 
-	c.cifsShare.Close()
 	return nil
 }
 
-func (c *Client) MessageHandler(mailbox string, message *imap.Message) {
-	log := logrus.WithField("mailbox", mailbox)
-	if message != nil && message.Envelope != nil {
-		log = log.WithField("subject", message.Envelope.Subject)
-	}
-	log.Info("received message")
+func (c *Client) Run(log *logrus.Logger) error {
 
-	err := c.SaveMessage(mailbox, message, c.cifsShare.Share, c.config.BackupDir)
-	if err != nil {
-		log.Error(err)
-		return
-	}
-
-	c.state.Mailboxes.Mailbox(mailbox).SavedLastUid = message.Uid
-
-	stateFile, err := c.cifsShare.Share.OpenFile(path.Join(c.config.BackupDir, ".state.json"), os.O_RDONLY|os.O_CREATE, os.ModePerm)
-	if err != nil {
-		log.Error(err)
-	}
-	_ = stateFile.Truncate(0)
-	_ = c.state.WriteTo(stateFile)
-	_ = stateFile.Close()
-}
-
-func (c *Client) Run(log *logrus.Logger, config Config) error {
-	err := c.Open(log, config)
+	err := c.open(log)
 	if err != nil {
 		return err
 	}
-	defer c.Close()
 
-	mailboxes, err := c.ListMailboxes(c.imapClient)
+	mailboxes, err := c.listMailboxNames(c.imapClient)
 	if err != nil {
 		return err
 	}
 	log.Info("mailbox listed")
 
-	c.state = NewState()
-	stateFile, err := c.cifsShare.Share.OpenFile(path.Join(c.config.BackupDir, ".state.json"), os.O_RDONLY, os.ModePerm)
-	if err == nil {
-		_ = c.state.ReadFrom(stateFile)
-		_ = stateFile.Close()
+	err = c.readState()
+	if err != nil {
+		return err
 	}
 
-	for _, mb := range mailboxes {
-		err = c.RunOnMailbox(mb)
+	for _, mbName := range mailboxes {
+		err = c.runOnMailbox(mbName)
 		if err != nil {
-			c.log.WithField("mailbox", mb.Name).Error(err)
+			c.log.WithField("mailbox", mbName).Error(err)
 			continue
 		}
 	}
@@ -124,26 +170,78 @@ func (c *Client) Run(log *logrus.Logger, config Config) error {
 	return nil
 }
 
-func (c *Client) RunOnMailbox(mb *imap.MailboxInfo) error {
-	c.log.WithField("mailbox", mb.Name).Info("processing mailbox")
-	if !c.state.Mailboxes.HasMailbox(mb.Name) {
-		return c.FetchAllMessages(mb.Name)
+func (c *Client) readState() error {
+	stateFilePath, backupFilePath, _ := c.stateFiles()
+	c.state = NewState()
+	stateDoesNotExists := false
+
+	{ // try to read from stat file
+		stateFile, err := c.stateFS.OpenFile(stateFilePath, os.O_RDONLY, os.ModePerm)
+		if err == nil {
+			defer stateFile.Close()
+			_, err = c.state.ReadFrom(stateFile)
+			if err == nil {
+				return nil
+			} else {
+				logrus.WithError(err).Warn("failed to read/parse state file")
+			}
+		} else {
+			if os.IsNotExist(err) {
+				stateDoesNotExists = true
+				logrus.WithError(err).Info("state file does not exist")
+			} else {
+				logrus.WithError(err).Warn("failed to open state file")
+			}
+		}
 	}
 
-	mbStatus, err := c.imapClient.Status(mb.Name, []imap.StatusItem{imap.StatusUidValidity})
+	logrus.Warn("continuing with backup file")
+
+	{ // try to read from backup file
+		backupStateFile, err := c.stateFS.OpenFile(backupFilePath, os.O_RDONLY, os.ModePerm)
+		if err == nil {
+			defer backupStateFile.Close()
+			_, err = c.state.ReadFrom(backupStateFile)
+			if err == nil {
+				return nil
+			} else {
+				logrus.WithError(err).Error("failed to read/parse backup file")
+				return err
+			}
+		} else {
+			if os.IsNotExist(err) {
+				if stateDoesNotExists {
+					logrus.WithError(err).Info("backup file does not exist. assuming blank state")
+					return nil
+				}
+			}
+
+			logrus.WithError(err).Error("failed to open backup file")
+			return err
+		}
+	}
+}
+
+func (c *Client) runOnMailbox(mailboxName string) error {
+	c.log.WithField("mailbox", mailboxName).Info("processing mailbox")
+	if !c.state.Mailboxes.HasMailbox(mailboxName) {
+		return c.fetchAllMessages(mailboxName)
+	}
+
+	mbStatus, err := c.imapClient.Status(mailboxName, []imap.StatusItem{imap.StatusUidValidity})
 	if err != nil {
 		return err
 	}
 
-	mbState := c.state.Mailboxes.Mailbox(mb.Name)
+	mbState := c.state.Mailboxes.Mailbox(mailboxName)
 	if mbStatus.UidValidity != mbState.SavedUidValidity {
-		return c.FetchAllMessages(mb.Name)
+		return c.fetchAllMessages(mailboxName)
 	}
 
-	return c.FetchUids(mb.Name, mbState.SavedLastUid)
+	return c.fetchUids(mailboxName, mbState.SavedLastUid)
 }
 
-func (c *Client) FetchAllMessages(mailbox string) error {
+func (c *Client) fetchAllMessages(mailbox string) error {
 	mbStatus, err := c.imapClient.Select(mailbox, true)
 	if err != nil {
 		return err
@@ -164,7 +262,7 @@ func (c *Client) FetchAllMessages(mailbox string) error {
 	return nil
 }
 
-func (c *Client) FetchUids(mailbox string, uidBegin uint32) error {
+func (c *Client) fetchUids(mailbox string, uidBegin uint32) error {
 	mbStatus, err := c.imapClient.Select(mailbox, true)
 	state := c.state.Mailboxes.Mailbox(mailbox)
 	state.SavedUidValidity = mbStatus.UidValidity
@@ -173,7 +271,11 @@ func (c *Client) FetchUids(mailbox string, uidBegin uint32) error {
 	}
 
 	seqset := new(imap.SeqSet)
-	seqset.AddRange(uidBegin, 0)
+	offsettedUidBegin := uint32(0)
+	if uidBegin >= c.lastMessageOffset {
+		offsettedUidBegin = uidBegin - (c.lastMessageOffset - 1)
+	}
+	seqset.AddRange(offsettedUidBegin, 0)
 
 	messages := make(chan *imap.Message, 10)
 	done := make(chan error, 1)
@@ -184,11 +286,12 @@ func (c *Client) FetchUids(mailbox string, uidBegin uint32) error {
 
 	for msg := range messages {
 		// skip over first message because it was the last message on the last run
-		if state.SavedLastUid == msg.Uid {
+		if c.lastMessageOffset == 0 && state.SavedLastUid == msg.Uid {
 			continue
 		}
+
 		state.SavedLastUid = msg.Uid
-		c.MessageHandler(mailbox, msg)
+		c.handleMessage(mailbox, msg)
 	}
 
 	return <-done
@@ -212,23 +315,120 @@ func (c *Client) fetchBatched(imapClient *client.Client, begin uint32, length ui
 	}
 
 	for msg := range messages {
-		c.MessageHandler(mbName, msg)
+		c.handleMessage(mbName, msg)
 	}
 
 	return <-done
 }
 
-func (c *Client) ListMailboxes(imapClient *client.Client) ([]*imap.MailboxInfo, error) {
+func (c *Client) listMailboxNames(imapClient *client.Client) ([]string, error) {
+
+	mailboxPluginPresent := false
+	var result []string
+	for _, plugin := range c.plugins {
+		if selectMailboxesPlugin, ok := plugin.(SelectMailboxesPlugin); ok {
+			mailboxPluginPresent = true
+			result = append(result, selectMailboxesPlugin.SelectMailboxes()...)
+		}
+	}
+
+	slices.Sort(result)
+	for i, name := range result {
+		if i > 0 && result[i-1] == name {
+			result = append(result[:i], result[i+1:]...)
+		}
+	}
+
+	if mailboxPluginPresent {
+		return result, nil
+	}
+
 	mailboxChannel := make(chan *imap.MailboxInfo, 10)
 	done := make(chan error, 1)
 	go func() {
 		done <- imapClient.List("", "*", mailboxChannel)
 	}()
 
-	var mailboxes []*imap.MailboxInfo
+	var mailboxes []string
 	for mb := range mailboxChannel {
-		mailboxes = append(mailboxes, mb)
+		mailboxes = append(mailboxes, mb.Name)
 	}
 
 	return mailboxes, <-done
+}
+
+func (c *Client) handleMessage(mailbox string, message *imap.Message) {
+	log := logrus.WithField("mailbox", mailbox)
+	if message != nil && message.Envelope != nil {
+		log = log.WithField("subject", message.Envelope.Subject)
+	}
+	log.Info("received message")
+
+	for _, plugin := range c.plugins {
+		if handleMessagePlugin, ok := plugin.(HandleMessagePlugin); ok {
+			handleMessagePlugin.HandleMessage(mailbox, message)
+		}
+	}
+
+	c.state.Mailboxes.Mailbox(mailbox).SavedLastUid = message.Uid
+
+	err := c.updateStateFile()
+	if err != nil {
+		logrus.Error(err)
+	}
+}
+
+func (c *Client) updateStateFile() error {
+	stateFilePath, backupFilePath, tempFilePath := c.stateFiles()
+	c.stateFS.MkdirAll(c.stateDirectory, os.ModePerm)
+
+	// write to temp file
+	{
+		tempFile, err := c.stateFS.OpenFile(tempFilePath, os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return err
+		}
+		defer tempFile.Close()
+
+		if truncFile, ok := tempFile.(hackpadfs.TruncaterFile); ok {
+			err = truncFile.Truncate(0)
+			if err != nil {
+				return err
+			}
+		} else {
+			return fmt.Errorf("failed to write to temp file. tempFile is not a hackpadfs.TruncaterFile")
+		}
+
+		if tempFile, ok := tempFile.(io.Writer); ok {
+			_, err = c.state.WriteTo(tempFile)
+			if err != nil {
+				return err
+			}
+		} else {
+			return fmt.Errorf("failed to write to temp file. tempFile is not an io.Writer")
+		}
+	}
+
+	if _, err := c.stateFS.Stat(stateFilePath); !os.IsNotExist(err) {
+		// move state file to backup file
+		err := c.stateFS.Rename(stateFilePath, backupFilePath)
+		if err != nil {
+			return err
+		}
+	}
+
+	// rename temp file to state file
+	err := c.stateFS.Rename(tempFilePath, stateFilePath)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c Client) stateFiles() (stateFile, backupFile, tmpFile string) {
+	stateFile = path.Join(c.stateDirectory, c.stateFile)
+	backupFile = stateFile + ".backup"
+	tmpFile = stateFile + ".tmp"
+	return
 }

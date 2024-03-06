@@ -1,9 +1,7 @@
-package imap_client
+package imap_backup
 
 import (
 	"fmt"
-	"github.com/emersion/go-imap"
-	"github.com/hirochachacha/go-smb2"
 	"io"
 	"os"
 	"path"
@@ -12,9 +10,52 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/emersion/go-imap"
+	"github.com/emersion/go-imap/client"
+	"github.com/hack-pad/hackpadfs"
+	"github.com/sirupsen/logrus"
 )
 
-func (c *Client) SaveMessage(mailbox string, message *imap.Message, fs *smb2.Share, backupDir string) error {
+type FS interface {
+	hackpadfs.FS
+	hackpadfs.WriteFileFS
+	hackpadfs.MkdirAllFS
+	hackpadfs.ChtimesFS
+}
+
+type Config struct {
+	BackupDir string `json:"backupDir" yaml:"backupDir"`
+}
+
+type ImapBackup struct {
+	fileSystem FS
+	backupDir  string
+}
+
+var FetchBodySection = imap.BodySectionName{}
+
+func NewImapBackup(fileSystem FS, cfg Config) *ImapBackup {
+	return &ImapBackup{
+		fileSystem: fileSystem,
+		backupDir:  cfg.BackupDir,
+	}
+}
+
+func (i *ImapBackup) Init(log *logrus.Logger, client *client.Client) error {
+	return nil
+}
+
+func (i *ImapBackup) HandleMessage(mailbox string, message *imap.Message) {
+	err := i.SaveMessage(mailbox, message, i.fileSystem, i.backupDir)
+	if err != nil {
+		logrus.Error(err)
+		return
+	}
+
+}
+
+func (i *ImapBackup) SaveMessage(mailbox string, message *imap.Message, fs FS, backupDir string) error {
 	filePath := path.Join(backupDir, GetPathOfMessage(mailbox, message))
 	err := fs.MkdirAll(path.Dir(filePath), os.ModePerm)
 	if err != nil {
@@ -22,20 +63,13 @@ func (c *Client) SaveMessage(mailbox string, message *imap.Message, fs *smb2.Sha
 	}
 
 	err = (func() error {
-		fd, err := fs.OpenFile(filePath, os.O_CREATE|os.O_RDWR, os.ModePerm)
-		if err != nil {
-			return err
-		}
-		defer fd.Close()
-
 		body := message.GetBody(&FetchBodySection)
-
-		_, err = io.Copy(fd, body)
+		bodyBytes, err := io.ReadAll(body)
 		if err != nil {
 			return err
 		}
 
-		return nil
+		return fs.WriteFile(filePath, bodyBytes, os.ModePerm)
 	})()
 
 	if err != nil {

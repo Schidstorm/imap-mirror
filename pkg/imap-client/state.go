@@ -5,6 +5,42 @@ import (
 	"io"
 )
 
+type State struct {
+	Mailboxes MailboxStateCollection `json:"mailboxes"`
+}
+
+func NewState() *State {
+	return &State{MailboxStateCollection{}}
+}
+
+func (s State) WriteTo(writer io.Writer) (int64, error) {
+	data, err := json.Marshal(&s)
+	if err != nil {
+		return 0, err
+	}
+
+	n, err := writer.Write(data)
+	if err != nil {
+		return 0, err
+	}
+
+	return int64(n), nil
+}
+
+func (s *State) ReadFrom(reader io.Reader) (int64, error) {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return 0, err
+	}
+
+	return int64(len(data)), json.Unmarshal(data, s)
+}
+
+type MailboxState struct {
+	SavedLastUid     uint32 `json:"savedLastUid"`
+	SavedUidValidity uint32 `json:"savedUidValidity"`
+}
+
 type MailboxStateCollection map[string]*MailboxState
 
 func (m *MailboxStateCollection) Mailbox(name string) *MailboxState {
@@ -23,36 +59,4 @@ func (m *MailboxStateCollection) Mailbox(name string) *MailboxState {
 func (m *MailboxStateCollection) HasMailbox(name string) bool {
 	_, ok := (*m)[name]
 	return ok
-}
-
-type State struct {
-	Mailboxes MailboxStateCollection `json:"mailboxes"`
-}
-
-func NewState() *State {
-	return &State{MailboxStateCollection{}}
-}
-
-func (s State) WriteTo(writer io.Writer) error {
-	data, err := json.Marshal(&s)
-	if err != nil {
-		return err
-	}
-
-	writer.Write(data)
-	return nil
-}
-
-func (s *State) ReadFrom(reader io.Reader) error {
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return err
-	}
-
-	return json.Unmarshal(data, s)
-}
-
-type MailboxState struct {
-	SavedLastUid     uint32 `json:"savedLastUid"`
-	SavedUidValidity uint32 `json:"savedUidValidity"`
 }
