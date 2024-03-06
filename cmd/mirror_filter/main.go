@@ -17,12 +17,13 @@ import (
 type Config struct {
 	RunPeriode *time.Duration `json:"runPeriode" yaml:"runPeriode"`
 
-	ImapAddr        string `json:"imapAddr" yaml:"imapAddr"`
-	ImapUsername    string `json:"imapUsername" yaml:"imapUsername"`
-	ImapPassword    string `json:"imapPassword" yaml:"imapPassword"`
-	StateDir        string `json:"stateDir" yaml:"stateDir"`
-	FilterStateFile string `json:"filterStateFile" yaml:"filterStateFile"`
-	BackupStateFile string `json:"backupStateFile" yaml:"backupStateFile"`
+	ImapAddr                string `json:"imapAddr" yaml:"imapAddr"`
+	ImapUsername            string `json:"imapUsername" yaml:"imapUsername"`
+	ImapPassword            string `json:"imapPassword" yaml:"imapPassword"`
+	StateDir                string `json:"stateDir" yaml:"stateDir"`
+	FilterStateFile         string `json:"filterStateFile" yaml:"filterStateFile"`
+	BackupStateFile         string `json:"backupStateFile" yaml:"backupStateFile"`
+	FilterLastMessageOffset uint32 `json:"filterLastMessageOffset" yaml:"filterLastMessageOffset"`
 
 	CifsConfig      cifs.Config                 `json:",inline" yaml:",inline"`
 	BackupConfig    imap_backup.Config          `json:",inline" yaml:",inline"`
@@ -161,11 +162,12 @@ func runFilterClient(cifsShare cifs.CifsShare, cfg Config) error {
 	)
 
 	client := imapclient.NewClient(cifsShare, imapclient.Config{
-		ImapAddr:     cfg.ImapAddr,
-		ImapUsername: cfg.ImapUsername,
-		ImapPassword: cfg.ImapPassword,
-		StateDir:     cfg.StateDir,
-		StateFile:    &cfg.FilterStateFile,
+		ImapAddr:          cfg.ImapAddr,
+		ImapUsername:      cfg.ImapUsername,
+		ImapPassword:      cfg.ImapPassword,
+		StateDir:          cfg.StateDir,
+		StateFile:         &cfg.FilterStateFile,
+		LastMessageOffset: cfg.FilterLastMessageOffset,
 	}, []imapclient.Plugin{filterClient})
 
 	err := client.Run(log.Log())
