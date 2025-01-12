@@ -2,87 +2,101 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"reflect"
+	"strings"
+	"time"
 
-	"github.com/emersion/go-imap"
 	lua "github.com/yuin/gopher-lua"
 )
 
-type LuaMail struct {
-	From        string
-	To          string
-	Subject     string
-	Body        string
-	Attachments []string
+type Mail struct {
+	From   []string
+	Bcc    []string
+	Cc     []string
+	To     []string
+	Sender []string
+
+	Subject string
+	Date    time.Time
 }
 
 func main() {
+	err := runFunctions("filter.lua", "Test")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+func runFunctions(luaFile, funcPattern string) error {
 	l := lua.NewState()
 	defer l.Close()
 
-	msg := imap.NewMessage(0, []imap.FetchItem{
-		imap.FetchEnvelope,
+	err := l.DoFile(luaFile)
+	if err != nil {
+		return err
+	}
+
+	var functions []string
+	l.ForEach(l.G.Global, func(key, value lua.LValue) {
+		if value.Type() == lua.LTFunction {
+			if strings.Contains(key.String(), funcPattern) {
+				functions = append(functions, key.String())
+			}
+		}
 	})
-	msg.Envelope = &imap.Envelope{
-		Subject: "test",
-	}
-	marshalToTable(l, msg)
 
-	err := l.DoFile("test.lua")
-	if err != nil {
-		panic(err)
-	}
-
-	filterFunc := l.G.Global.RawGet(lua.LString("filter"))
-
-	if filterFunc == lua.LNil {
-		fmt.Println("filter not found")
-		return
+	var failedCount int
+	for _, funcName := range functions {
+		err := runFunction(l, funcName)
+		if err != nil {
+			fmt.Printf("[%s] error: %s\n", funcName, err)
+			failedCount++
+		} else {
+			fmt.Printf("[%s] successfull\n", funcName)
+		}
 	}
 
-	if filterFunc.Type() != lua.LTFunction {
-		fmt.Println("filter is not a function")
-		return
+	if failedCount == 0 {
+		return nil
 	}
 
-	err = l.CallByParam(lua.P{
-		Fn:      filterFunc,
-		NRet:    1,
+	return fmt.Errorf("failed functions: %d", failedCount)
+}
+
+func runFunction(l *lua.LState, funcName string, args ...any) error {
+	luaFunc := l.G.Global.RawGet(lua.LString(funcName))
+	if luaFunc == lua.LNil {
+		return fmt.Errorf("%s not found", funcName)
+	}
+
+	if luaFunc.Type() != lua.LTFunction {
+		return fmt.Errorf("%s is not a function", funcName)
+	}
+
+	var luaArgs []lua.LValue
+	for _, arg := range args {
+		luaArgs = append(luaArgs, marshalToTable(l, arg))
+	}
+
+	err := l.CallByParam(lua.P{
+		Fn:      luaFunc,
+		NRet:    0,
 		Protect: true,
-	}, createLuaMail(l))
-
-	fmt.Println()
-
+	}, luaArgs...)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	ret := l.Get(-1)
-	l.Pop(1)
-
-	if s, ok := ret.(lua.LBool); ok {
-		fmt.Println(s)
-	} else {
-		fmt.Println("not a bool")
-	}
-}
-
-func createLuaMail(L *lua.LState) *lua.LTable {
-	mt := L.NewTypeMetatable("luaMail")
-	L.SetField(mt, "new", L.NewFunction(newLuaMail))
-	return mt
-}
-
-func newLuaMail(L *lua.LState) int {
-	mail := &LuaMail{}
-	ud := L.NewUserData()
-	ud.Value = mail
-	L.SetMetatable(ud, L.GetTypeMetatable("luaMail"))
-	L.Push(ud)
-	return 1
+	return nil
 }
 
 func marshalToTable(L *lua.LState, mail interface{}) lua.LValue {
+	if v, ok := mail.(lua.LValue); ok {
+		return v
+	}
+
 	t := reflect.TypeOf(mail)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -101,7 +115,6 @@ func marshalToTable(L *lua.LState, mail interface{}) lua.LValue {
 			vField := v.Field(i)
 
 			if field.IsExported() {
-				fmt.Println(field.Name, v.Field(i).Interface())
 				val := lua.LNil
 				if vField.Kind() != reflect.Ptr && vField.Kind() != reflect.Map || !vField.IsNil() {
 					val = marshalToTable(L, vField.Interface())
@@ -127,8 +140,7 @@ func marshalToTable(L *lua.LState, mail interface{}) lua.LValue {
 	case reflect.Slice:
 		arr := L.NewTable()
 		for i := 0; i < v.Len(); i++ {
-			v.Field(i)
-			arr.RawSetInt(i+1, marshalToTable(L, v))
+			arr.RawSetInt(i+1, marshalToTable(L, v.Index(i).Interface()))
 		}
 		return arr
 	case reflect.Uint8:
@@ -154,15 +166,3 @@ func marshalToTable(L *lua.LState, mail interface{}) lua.LValue {
 
 	}
 }
-
-// 	table := L.NewTable()
-// 	for _, field := range  {
-// 		L.SetField(table, field.Name, lua.LString(field.Name))
-// 	}
-// 	L.SetField(table, "from", lua.LString(mail.From))
-// 	L.SetField(table, "to", lua.LString(mail.To))
-// 	L.SetField(table, "subject", lua.LString(mail.Subject))
-// 	L.SetField(table, "body", lua.LString(mail.Body))
-// 	L.SetField(table, "attachments", lua.LString(mail.Attachments))
-// 	return table
-// }

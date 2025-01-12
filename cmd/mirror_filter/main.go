@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -116,7 +117,21 @@ func loadConfig(configFilePath string) (Config, error) {
 	return cfg, nil
 }
 
-func daemon(cfg Config) error {
+func daemon(cfg Config) (resultErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			var err error
+			if rErr, ok := r.(error); ok {
+				err = rErr
+			} else {
+				err = fmt.Errorf("%v", r)
+			}
+
+			resultErr = fmt.Errorf("cought panic: %w", err)
+			return
+		}
+	}()
+
 	cifsShare, err := cifs.OpenCifsShare(cifs.Config{
 		CifsAddr:     cfg.CifsConfig.CifsAddr,
 		CifsUsername: cfg.CifsConfig.CifsUsername,

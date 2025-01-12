@@ -191,8 +191,30 @@ func (f *LuaFilter) Filter(mailbox string, message *Mail) (FilterResult, error) 
 			continue
 		}
 
-		if accept, ok := accept.(lua.LBool); ok && !bool(accept) {
-			return FilterResultReject, nil
+		if boolAccept, ok := accept.(lua.LBool); ok {
+			if !bool(boolAccept) {
+				return FilterResultReject, nil
+			}
+		} else if todo, ok := accept.(*lua.LTable); ok {
+			if todo == nil {
+				log.Error("tried to deal with nil LTable value from Filter()")
+				continue
+			}
+
+			var kind = FilterResultKindNoop
+			if s, ok := todo.RawGetString("kind").(lua.LString); ok {
+				kind = FilterTypeResultFromString(string(s))
+			}
+
+			var target = ""
+			if s, ok := todo.RawGetString("target").(lua.LString); ok {
+				target = string(s)
+			}
+
+			return FilterResult{
+				Kind:   kind,
+				Target: target,
+			}, nil
 		}
 	}
 

@@ -98,7 +98,7 @@ func (c *Client) open(log *logrus.Logger) error {
 
 	imapClient, err := client.DialTLS(c.config.ImapAddr, nil)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	c.imapClient = imapClient
 	log.Info("connected")

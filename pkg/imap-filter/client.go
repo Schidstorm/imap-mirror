@@ -1,6 +1,7 @@
 package imap_filter
 
 import (
+	"errors"
 	"slices"
 
 	"github.com/emersion/go-imap"
@@ -13,7 +14,13 @@ var log *logrus.Logger = logrus.New()
 
 type FilterClient struct {
 	filters      []Filter
-	toDeleteList map[string][]uint32
+	toDeleteList map[filterTodoKey][]uint32
+}
+
+type filterTodoKey struct {
+	Kind          FilterResultKind
+	TargetMailbox string
+	RunInMailbox  string
 }
 
 func NewFilterClient(filters ...Filter) *FilterClient {
@@ -51,26 +58,31 @@ func (f *FilterClient) SelectMailboxes() []string {
 
 func (f *FilterClient) HandleMessage(mailbox string, message *imap.Message) {
 	result := f.FilterImap(mailbox, message)
-	if result == FilterResultReject {
+	if result != FilterResultAccept {
 		log.Infof("rejecting message %d", message.Uid)
-		f.addUidToDeleteList(mailbox, message.Uid)
+		f.addUidToDeleteList(filterTodoKey{
+			Kind:          result.Kind,
+			TargetMailbox: result.Target,
+			RunInMailbox:  mailbox,
+		}, mailbox, message.Uid)
 	}
 }
 
-func (f *FilterClient) addUidToDeleteList(mailbox string, uid uint32) {
+func (f *FilterClient) addUidToDeleteList(key filterTodoKey, mailbox string, uid uint32) {
 	if f.toDeleteList == nil {
-		f.toDeleteList = make(map[string][]uint32)
+		f.toDeleteList = make(map[filterTodoKey][]uint32)
 	}
-	f.toDeleteList[mailbox] = append(f.toDeleteList[mailbox], uid)
+	f.toDeleteList[key] = append(f.toDeleteList[key], uid)
 }
 
 func (f *FilterClient) ProcessDeletions(c *client.Client) {
-	for mailbox, uids := range f.toDeleteList {
+	for todoKey, uids := range f.toDeleteList {
 		if len(uids) == 0 {
 			continue
 		}
-		log.Infof("deleting %d messages from %s", len(uids), mailbox)
-		err := f.deleteMessages(c, mailbox, uids)
+
+		log.Infof("processing %d messages from %s with kind %s and target '%s'", len(uids), todoKey.RunInMailbox, todoKey.Kind, todoKey.TargetMailbox)
+		err := f.deleteMessages(c, todoKey, uids)
 		if err != nil {
 			log.WithError(err).Error("failed to delete messages")
 		}
@@ -79,22 +91,32 @@ func (f *FilterClient) ProcessDeletions(c *client.Client) {
 	f.toDeleteList = nil
 }
 
-func (f *FilterClient) deleteMessages(c *client.Client, mailbox string, messages []uint32) error {
-	if mailbox == "Trash" {
+func (f *FilterClient) deleteMessages(c *client.Client, todoKey filterTodoKey, messages []uint32) error {
+	if todoKey.RunInMailbox == "Trash" {
 		return nil
 	}
 
-	_, err := c.Select(mailbox, false)
+	if todoKey.Kind == FilterResultKindNoop {
+		return nil
+	}
+
+	_, err := c.Select(todoKey.RunInMailbox, false)
 	if err != nil {
 		return err
 	}
 
-	deleteSeqSet := new(imap.SeqSet)
+	msgSeq := new(imap.SeqSet)
 	for _, uid := range messages {
-		deleteSeqSet.AddNum(uid)
+		msgSeq.AddNum(uid)
 	}
 
-	return c.UidMove(deleteSeqSet, "Spam.Shit")
+	if todoKey.Kind == FilterResultKindDelete {
+		return c.UidMove(msgSeq, "Spam.Shit")
+	} else if todoKey.Kind == FilterResultKindMove {
+		return c.UidMove(msgSeq, todoKey.TargetMailbox)
+	} else {
+		return errors.New("failed to process unknown FilterResultKind")
+	}
 }
 
 func (f *FilterClient) FilterImap(mailbox string, imapMessage *imap.Message) FilterResult {
@@ -124,8 +146,8 @@ func (f *FilterClient) filter(mailbox string, message *Mail) FilterResult {
 			log.WithError(err).Error("failed to filter message")
 			continue
 		}
-		if result == FilterResultReject {
-			return FilterResultReject
+		if result != FilterResultAccept {
+			return result
 		}
 	}
 
