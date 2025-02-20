@@ -7,7 +7,6 @@ import (
 	"os"
 	"path"
 	"reflect"
-	"slices"
 	"time"
 
 	"github.com/emersion/go-imap"
@@ -18,16 +17,13 @@ import (
 
 const FetchBatchSize = 100
 const FetchBatchWaitTime = 500 * time.Millisecond
+const loopLimitTime = 1 * time.Minute
 
 var FetchBodySection = imap.BodySectionName{}
 var FetchItems = []imap.FetchItem{
 	imap.FetchUid,
 	imap.FetchEnvelope,
 	FetchBodySection.FetchItem(),
-}
-
-type Plugin interface {
-	Init(log *logrus.Logger, client *client.Client) error
 }
 
 type HandleMessagePlugin interface {
@@ -59,15 +55,16 @@ type Client struct {
 	imapClient        *client.Client
 	log               *logrus.Logger
 	config            Config
-	plugins           []Plugin
+	messageHandlers   []HandleMessagePlugin
 	state             *State
 	stateFS           FS
 	stateDirectory    string
 	lastMessageOffset uint32
 	stateFile         string
+	closeChan         chan struct{}
 }
 
-func NewClient(stateFS FS, cfg Config, messageHandlers []Plugin) *Client {
+func NewClient(stateFS FS, cfg Config, messageHandlers []HandleMessagePlugin) *Client {
 	stateFile := ".state.json"
 	if cfg.StateFile != nil {
 		stateFile = *cfg.StateFile
@@ -78,9 +75,10 @@ func NewClient(stateFS FS, cfg Config, messageHandlers []Plugin) *Client {
 		stateDirectory:    cfg.StateDir,
 		state:             NewState(),
 		config:            cfg,
-		plugins:           messageHandlers,
+		messageHandlers:   messageHandlers,
 		lastMessageOffset: cfg.LastMessageOffset,
 		stateFile:         stateFile,
+		closeChan:         make(chan struct{}),
 	}
 }
 
@@ -110,8 +108,8 @@ func (c *Client) open(log *logrus.Logger) error {
 	log.Info("logged in")
 
 	var removePlugins []int
-	for i, plugin := range c.plugins {
-		err := plugin.Init(log, imapClient)
+	for i, plugin := range c.messageHandlers {
+		// err := plugin.Init(log, imapClient)
 		if err != nil {
 			log.WithError(err).WithField("plugin", reflect.TypeOf(plugin).String()).Error("failed to init plugin. removing plugin from list.")
 			removePlugins = append(removePlugins, i)
@@ -120,14 +118,18 @@ func (c *Client) open(log *logrus.Logger) error {
 	}
 
 	for _, i := range removePlugins {
-		c.plugins = append(c.plugins[:i], c.plugins[i+1:]...)
+		c.messageHandlers = append(c.messageHandlers[:i], c.messageHandlers[i+1:]...)
 	}
 
 	return nil
 }
 
 func (c *Client) Close() error {
-	for _, plugin := range c.plugins {
+	c.closeChan <- struct{}{}
+	<-c.closeChan
+	close(c.closeChan)
+
+	for _, plugin := range c.messageHandlers {
 		if closer, ok := plugin.(io.Closer); ok {
 			closer.Close()
 		}
@@ -141,33 +143,102 @@ func (c *Client) Close() error {
 	return nil
 }
 
+func (c *Client) Open(log *logrus.Logger) error {
+	return c.open(log)
+}
+
 func (c *Client) Run(log *logrus.Logger) error {
+	lastLoopRun := time.Now()
 
-	err := c.open(log)
-	if err != nil {
-		return err
-	}
-
-	mailboxes, err := c.listMailboxNames(c.imapClient)
-	if err != nil {
-		return err
-	}
-	log.Info("mailbox listed")
-
-	err = c.readState()
-	if err != nil {
-		return err
-	}
-
-	for _, mbName := range mailboxes {
-		err = c.runOnMailbox(mbName)
+	for {
+		c.log.Info("starting loop")
+		mailboxes, err := c.listMailboxNames(c.imapClient)
 		if err != nil {
-			c.log.WithField("mailbox", mbName).Error(err)
+			return err
+		}
+
+		err = c.readState()
+		if err != nil {
+			return err
+		}
+
+		for _, mbName := range mailboxes {
+			err = c.runOnMailbox(mbName)
+			if err != nil {
+				c.log.WithField("mailbox", mbName).Error(err)
+				continue
+			}
+		}
+
+		err = c.waitForMailboxUpdate("INBOX")
+		if err != nil {
+			c.log.WithError(err).Error("failed to wait for mailbox update. sleeping for 1 hour")
+			time.Sleep(1 * time.Hour)
 			continue
 		}
+
+		limitCalls(&lastLoopRun)
+	}
+}
+
+func limitCalls(lastCall *time.Time) {
+	time.Sleep(loopLimitTime - time.Since(*lastCall))
+	*lastCall = time.Now()
+}
+
+func (c *Client) waitForMailboxUpdate(mailbox string) error {
+	c.log.WithField("mailbox", mailbox).Info("waiting for mailbox update")
+	defer c.log.WithField("mailbox", mailbox).Info("mailbox updated")
+
+	_, err := c.imapClient.Select("INBOX", true)
+	if err != nil {
+		return err
 	}
 
-	return nil
+	updateChan := make(chan client.Update, 16)
+	c.imapClient.Updates = updateChan
+	defer close(updateChan)
+	defer func() {
+		c.imapClient.Updates = nil
+		drainChannel(updateChan)
+	}()
+
+	stopChan := make(chan struct{})
+
+	go func() {
+		defer close(stopChan)
+
+		for {
+			select {
+			case <-c.closeChan:
+				c.log.Debug("closing idle")
+				c.closeChan <- struct{}{}
+				return
+			case update := <-updateChan:
+				switch update := update.(type) {
+				case *client.MailboxUpdate:
+					if update.Mailbox.Name == mailbox {
+						c.log.WithField("mailbox", mailbox).Info("mailbox updated")
+						return
+					}
+				default:
+					continue
+				}
+			}
+		}
+	}()
+
+	return c.imapClient.Idle(stopChan, &client.IdleOptions{LogoutTimeout: 0})
+}
+
+func drainChannel(ch chan client.Update) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
 }
 
 func (c *Client) readState() error {
@@ -322,27 +393,6 @@ func (c *Client) fetchBatched(imapClient *client.Client, begin uint32, length ui
 }
 
 func (c *Client) listMailboxNames(imapClient *client.Client) ([]string, error) {
-
-	mailboxPluginPresent := false
-	var result []string
-	for _, plugin := range c.plugins {
-		if selectMailboxesPlugin, ok := plugin.(SelectMailboxesPlugin); ok {
-			mailboxPluginPresent = true
-			result = append(result, selectMailboxesPlugin.SelectMailboxes()...)
-		}
-	}
-
-	slices.Sort(result)
-	for i, name := range result {
-		if i > 0 && result[i-1] == name {
-			result = append(result[:i], result[i+1:]...)
-		}
-	}
-
-	if mailboxPluginPresent {
-		return result, nil
-	}
-
 	mailboxChannel := make(chan *imap.MailboxInfo, 10)
 	done := make(chan error, 1)
 	go func() {
@@ -364,10 +414,8 @@ func (c *Client) handleMessage(mailbox string, message *imap.Message) {
 	}
 	log.Info("received message")
 
-	for _, plugin := range c.plugins {
-		if handleMessagePlugin, ok := plugin.(HandleMessagePlugin); ok {
-			handleMessagePlugin.HandleMessage(mailbox, message)
-		}
+	for _, handleMessagePlugin := range c.messageHandlers {
+		handleMessagePlugin.HandleMessage(mailbox, message)
 	}
 
 	c.state.Mailboxes.Mailbox(mailbox).SavedLastUid = message.Uid

@@ -51,9 +51,15 @@ func main() {
 
 			backupClient := imap_backup.NewImapBackup(cifsShare, cfg.BackupConfig)
 
-			client := imapclient.NewClient(cifsShare, cfg.ClientConfig, []imapclient.Plugin{backupClient})
-			err = client.Run(log.Log())
+			client := imapclient.NewClient(cifsShare, cfg.ClientConfig, []imapclient.HandleMessagePlugin{backupClient})
+			defer client.Close()
 
+			err = client.Open(log.Log())
+			if err != nil {
+				return err
+			}
+
+			err = client.Run(log.Log())
 			if err != nil {
 				log.Log().Error(err)
 			}

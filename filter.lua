@@ -202,6 +202,10 @@ local function doesMatch(subject, list, matcher)
 end
 
 function Filter(subject, mailbox)
+    if mailbox ~= "INBOX" then
+        return accept()
+    end
+
     if not doMailboxesContain(onlyMailboxes, mailbox) then
         return accept()
     end

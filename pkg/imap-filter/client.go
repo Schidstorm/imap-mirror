@@ -13,25 +13,13 @@ import (
 var log *logrus.Logger = logrus.New()
 
 type FilterClient struct {
-	filters      []Filter
-	toDeleteList map[filterTodoKey][]uint32
-}
-
-type filterTodoKey struct {
-	Kind          FilterResultKind
-	TargetMailbox string
-	RunInMailbox  string
+	filters []Filter
+	client  *client.Client
 }
 
 func NewFilterClient(filters ...Filter) *FilterClient {
-	return &FilterClient{
-		filters: filters,
-	}
-}
-
-func (f *FilterClient) Init(log *logrus.Logger, _ *client.Client) error {
 	failedFilters := []int{}
-	for i, filter := range f.filters {
+	for i, filter := range filters {
 		err := filter.Init()
 		if err != nil {
 			log.WithError(err).Errorf("failed to init filter %d", i)
@@ -41,10 +29,16 @@ func (f *FilterClient) Init(log *logrus.Logger, _ *client.Client) error {
 	slices.Reverse(failedFilters)
 
 	for _, i := range failedFilters {
-		f.filters = append(f.filters[:i], f.filters[i+1:]...)
+		filters = append(filters[:i], filters[i+1:]...)
 	}
 
-	return nil
+	return &FilterClient{
+		filters: filters,
+	}
+}
+
+func (f *FilterClient) SetClient(c *client.Client) {
+	f.client = c
 }
 
 func (f *FilterClient) SelectMailboxes() []string {
@@ -59,61 +53,35 @@ func (f *FilterClient) SelectMailboxes() []string {
 func (f *FilterClient) HandleMessage(mailbox string, message *imap.Message) {
 	result := f.FilterImap(mailbox, message)
 	if result != FilterResultAccept {
-		log.Infof("rejecting message %d", message.Uid)
-		f.addUidToDeleteList(filterTodoKey{
-			Kind:          result.Kind,
-			TargetMailbox: result.Target,
-			RunInMailbox:  mailbox,
-		}, mailbox, message.Uid)
+
+		f.applyResultToMessage(result, mailbox, message.Uid)
 	}
 }
 
-func (f *FilterClient) addUidToDeleteList(key filterTodoKey, mailbox string, uid uint32) {
-	if f.toDeleteList == nil {
-		f.toDeleteList = make(map[filterTodoKey][]uint32)
-	}
-	f.toDeleteList[key] = append(f.toDeleteList[key], uid)
-}
-
-func (f *FilterClient) ProcessDeletions(c *client.Client) {
-	for todoKey, uids := range f.toDeleteList {
-		if len(uids) == 0 {
-			continue
-		}
-
-		log.Infof("processing %d messages from %s with kind %s and target '%s'", len(uids), todoKey.RunInMailbox, todoKey.Kind, todoKey.TargetMailbox)
-		err := f.deleteMessages(c, todoKey, uids)
-		if err != nil {
-			log.WithError(err).Error("failed to delete messages")
-		}
-	}
-
-	f.toDeleteList = nil
-}
-
-func (f *FilterClient) deleteMessages(c *client.Client, todoKey filterTodoKey, messages []uint32) error {
-	if todoKey.RunInMailbox == "Trash" {
+func (f *FilterClient) applyResultToMessage(filterResult FilterResult, mailbox string, message uint32) error {
+	if filterResult.Kind == FilterResultKindNoop {
 		return nil
 	}
 
-	if todoKey.Kind == FilterResultKindNoop {
+	if mailbox == "Trash" {
 		return nil
 	}
 
-	_, err := c.Select(todoKey.RunInMailbox, false)
+	c := f.client
+	_, err := c.Select(mailbox, false)
 	if err != nil {
 		return err
 	}
 
 	msgSeq := new(imap.SeqSet)
-	for _, uid := range messages {
-		msgSeq.AddNum(uid)
-	}
+	msgSeq.AddNum(message)
 
-	if todoKey.Kind == FilterResultKindDelete {
+	if filterResult.Kind == FilterResultKindDelete {
+		log.Infof("deleting message %d from %s", message, mailbox)
 		return c.UidMove(msgSeq, "Spam.Shit")
-	} else if todoKey.Kind == FilterResultKindMove {
-		return c.UidMove(msgSeq, todoKey.TargetMailbox)
+	} else if filterResult.Kind == FilterResultKindMove {
+		log.Infof("moving message %d from %s to %s", message, mailbox, filterResult.Target)
+		return c.UidMove(msgSeq, filterResult.Target)
 	} else {
 		return errors.New("failed to process unknown FilterResultKind")
 	}

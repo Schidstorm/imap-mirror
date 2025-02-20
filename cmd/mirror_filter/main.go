@@ -35,7 +35,6 @@ func main() {
 	log.ConfigLogger(logrus.InfoLevel)
 	root := &cobra.Command{
 		RunE: func(cmd *cobra.Command, args []string) error {
-
 			for {
 				cfg, err := loadConfig(cmd.Flag("config.file").Value.String())
 				if err != nil {
@@ -143,31 +142,12 @@ func daemon(cfg Config) (resultErr error) {
 	}
 	defer cifsShare.Close()
 
-	err = runBackupClient(cifsShare, cfg)
-	if err != nil {
-		return err
-	}
-
-	return runFilterClient(cifsShare, cfg)
+	return runClient(cifsShare, cfg)
 }
 
-func runBackupClient(cifsShare cifs.CifsShare, cfg Config) error {
-	log.Log().Info("Running backup client")
-	backupClient := imap_backup.NewImapBackup(cifsShare, cfg.BackupConfig)
+func runClient(cifsShare cifs.CifsShare, cfg Config) error {
+	log.Log().Info("Running client")
 
-	client := imapclient.NewClient(cifsShare, imapclient.Config{
-		ImapAddr:     cfg.ImapAddr,
-		ImapUsername: cfg.ImapUsername,
-		ImapPassword: cfg.ImapPassword,
-		StateDir:     cfg.StateDir,
-		StateFile:    &cfg.BackupStateFile,
-	}, []imapclient.Plugin{backupClient})
-
-	return client.Run(log.Log())
-}
-
-func runFilterClient(cifsShare cifs.CifsShare, cfg Config) error {
-	log.Log().Info("Running filter client")
 	filterClient := imap_filter.NewFilterClient(
 		imap_filter.NewLuaFilter(cfg.LuaFilterConfig, func(dir string) ([]string, error) {
 			return cifsShare.ListFiles(dir)
@@ -176,21 +156,23 @@ func runFilterClient(cifsShare cifs.CifsShare, cfg Config) error {
 		}),
 	)
 
-	client := imapclient.NewClient(cifsShare, imapclient.Config{
-		ImapAddr:          cfg.ImapAddr,
-		ImapUsername:      cfg.ImapUsername,
-		ImapPassword:      cfg.ImapPassword,
-		StateDir:          cfg.StateDir,
-		StateFile:         &cfg.FilterStateFile,
-		LastMessageOffset: cfg.FilterLastMessageOffset,
-	}, []imapclient.Plugin{filterClient})
+	backupClient := imap_backup.NewImapBackup(cifsShare, cfg.BackupConfig)
 
-	err := client.Run(log.Log())
+	client := imapclient.NewClient(cifsShare, imapclient.Config{
+		ImapAddr:     cfg.ImapAddr,
+		ImapUsername: cfg.ImapUsername,
+		ImapPassword: cfg.ImapPassword,
+		StateDir:     cfg.StateDir,
+		StateFile:    &cfg.BackupStateFile,
+	}, []imapclient.HandleMessagePlugin{backupClient, filterClient})
+	defer client.Close()
+
+	err := client.Open(log.Log())
 	if err != nil {
 		return err
 	}
 
-	filterClient.ProcessDeletions(client.GetImapClient())
+	filterClient.SetClient(client.GetImapClient())
 
-	return nil
+	return client.Run(log.Log())
 }

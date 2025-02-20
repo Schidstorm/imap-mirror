@@ -1,4 +1,4 @@
-version = 1.0.3
+version = 1.0.5
 
 define smb
 	smbclient //$(shell yq '.cifsAddr' config.yml | cut -d: -f1)/$(1) --password "${SMB_PASSWORD}" -U "user" -c "$(2)"

@@ -12,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/emersion/go-imap"
-	"github.com/emersion/go-imap/client"
 	"github.com/hack-pad/hackpadfs"
 	"github.com/sirupsen/logrus"
 )
@@ -40,10 +39,6 @@ func NewImapBackup(fileSystem FS, cfg Config) *ImapBackup {
 		fileSystem: fileSystem,
 		backupDir:  cfg.BackupDir,
 	}
-}
-
-func (i *ImapBackup) Init(log *logrus.Logger, client *client.Client) error {
-	return nil
 }
 
 func (i *ImapBackup) HandleMessage(mailbox string, message *imap.Message) {

@@ -57,12 +57,16 @@ func main() {
 				}),
 			)
 
-			client := imapclient.NewClient(cifsShare, cfg.ClientConfig, []imapclient.Plugin{filterClient})
+			client := imapclient.NewClient(cifsShare, cfg.ClientConfig, []imapclient.HandleMessagePlugin{filterClient})
 			defer client.Close()
+			err = client.Open(log.Log())
+			if err != nil {
+				return err
+			}
+
+			filterClient.SetClient(client.GetImapClient())
+
 			err = client.Run(log.Log())
-
-			filterClient.ProcessDeletions(client.GetImapClient())
-
 			if err != nil {
 				log.Log().Error(err)
 			}
