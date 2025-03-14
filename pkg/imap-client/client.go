@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"reflect"
 	"time"
 
 	"github.com/emersion/go-imap"
@@ -52,7 +51,8 @@ type Config struct {
 }
 
 type Client struct {
-	imapClient        *client.Client
+	activeConnection  *Connection
+	idleConnection    *Connection
 	log               *logrus.Logger
 	config            Config
 	messageHandlers   []HandleMessagePlugin
@@ -79,49 +79,32 @@ func NewClient(stateFS FS, cfg Config, messageHandlers []HandleMessagePlugin) *C
 		lastMessageOffset: cfg.LastMessageOffset,
 		stateFile:         stateFile,
 		closeChan:         make(chan struct{}),
+		activeConnection: NewConnection(ConnectionParams{
+			ImapAddr:     cfg.ImapAddr,
+			ImapUsername: cfg.ImapUsername,
+			ImapPassword: cfg.ImapPassword,
+		}),
+		idleConnection: NewConnection(ConnectionParams{
+			ImapAddr:     cfg.ImapAddr,
+			ImapUsername: cfg.ImapUsername,
+			ImapPassword: cfg.ImapPassword,
+		}),
 	}
 }
 
-func (c Client) GetImapClient() *client.Client {
-	return c.imapClient
+func (c *Client) GetImapClient() *client.Client {
+	return c.activeConnection.GetClient()
 }
 
 func (c *Client) open(log *logrus.Logger) error {
 	c.log = log
 
-	if c.imapClient != nil {
-		c.imapClient.Close()
-		c.imapClient.Logout()
-	}
-
-	imapClient, err := client.DialTLS(c.config.ImapAddr, nil)
+	err := c.idleConnection.Open()
 	if err != nil {
 		return err
 	}
-	c.imapClient = imapClient
-	log.Info("connected")
 
-	// Login
-	if err := imapClient.Login(c.config.ImapUsername, c.config.ImapPassword); err != nil {
-		return err
-	}
-	log.Info("logged in")
-
-	var removePlugins []int
-	for i, plugin := range c.messageHandlers {
-		// err := plugin.Init(log, imapClient)
-		if err != nil {
-			log.WithError(err).WithField("plugin", reflect.TypeOf(plugin).String()).Error("failed to init plugin. removing plugin from list.")
-			removePlugins = append(removePlugins, i)
-			continue
-		}
-	}
-
-	for _, i := range removePlugins {
-		c.messageHandlers = append(c.messageHandlers[:i], c.messageHandlers[i+1:]...)
-	}
-
-	return nil
+	return c.activeConnection.Open()
 }
 
 func (c *Client) Close() error {
@@ -135,9 +118,12 @@ func (c *Client) Close() error {
 		}
 	}
 
-	if c.imapClient != nil {
-		c.imapClient.Logout()
-		c.imapClient.Close()
+	if c.activeConnection != nil {
+		c.activeConnection.Close()
+	}
+
+	if c.idleConnection != nil {
+		c.idleConnection.Close()
 	}
 
 	return nil
@@ -152,7 +138,7 @@ func (c *Client) Run(log *logrus.Logger) error {
 
 	for {
 		c.log.Info("starting loop")
-		mailboxes, err := c.listMailboxNames(c.imapClient)
+		mailboxes, err := c.listMailboxNames(c.activeConnection.GetClient())
 		if err != nil {
 			return err
 		}
@@ -190,16 +176,16 @@ func (c *Client) waitForMailboxUpdate(mailbox string) error {
 	c.log.WithField("mailbox", mailbox).Info("waiting for mailbox update")
 	defer c.log.WithField("mailbox", mailbox).Info("mailbox updated")
 
-	_, err := c.imapClient.Select("INBOX", true)
+	_, err := c.idleConnection.GetClient().Select("INBOX", true)
 	if err != nil {
 		return err
 	}
 
 	updateChan := make(chan client.Update, 16)
-	c.imapClient.Updates = updateChan
+	c.idleConnection.GetClient().Updates = updateChan
 	defer close(updateChan)
 	defer func() {
-		c.imapClient.Updates = nil
+		c.idleConnection.GetClient().Updates = nil
 		drainChannel(updateChan)
 	}()
 
@@ -228,7 +214,7 @@ func (c *Client) waitForMailboxUpdate(mailbox string) error {
 		}
 	}()
 
-	return c.imapClient.Idle(stopChan, &client.IdleOptions{LogoutTimeout: 0})
+	return c.idleConnection.GetClient().Idle(stopChan, &client.IdleOptions{LogoutTimeout: 0})
 }
 
 func drainChannel(ch chan client.Update) {
@@ -299,7 +285,7 @@ func (c *Client) runOnMailbox(mailboxName string) error {
 		return c.fetchAllMessages(mailboxName)
 	}
 
-	mbStatus, err := c.imapClient.Status(mailboxName, []imap.StatusItem{imap.StatusUidValidity})
+	mbStatus, err := c.activeConnection.GetClient().Status(mailboxName, []imap.StatusItem{imap.StatusUidValidity})
 	if err != nil {
 		return err
 	}
@@ -313,7 +299,7 @@ func (c *Client) runOnMailbox(mailboxName string) error {
 }
 
 func (c *Client) fetchAllMessages(mailbox string) error {
-	mbStatus, err := c.imapClient.Select(mailbox, true)
+	mbStatus, err := c.activeConnection.GetClient().Select(mailbox, true)
 	if err != nil {
 		return err
 	}
@@ -322,7 +308,7 @@ func (c *Client) fetchAllMessages(mailbox string) error {
 	state.SavedUidValidity = mbStatus.UidValidity
 
 	for i := uint32(1); i < mbStatus.Messages; i += FetchBatchSize {
-		err = c.fetchBatched(c.imapClient, i, FetchBatchSize)
+		err = c.fetchBatched(c.activeConnection.GetClient(), i, FetchBatchSize)
 		if err != nil {
 			return err
 		}
@@ -334,7 +320,7 @@ func (c *Client) fetchAllMessages(mailbox string) error {
 }
 
 func (c *Client) fetchUids(mailbox string, uidBegin uint32) error {
-	mbStatus, err := c.imapClient.Select(mailbox, true)
+	mbStatus, err := c.activeConnection.GetClient().Select(mailbox, true)
 	state := c.state.Mailboxes.Mailbox(mailbox)
 	state.SavedUidValidity = mbStatus.UidValidity
 	if err != nil {
@@ -352,7 +338,7 @@ func (c *Client) fetchUids(mailbox string, uidBegin uint32) error {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- c.imapClient.UidFetch(seqset, FetchItems, messages)
+		done <- c.activeConnection.GetClient().UidFetch(seqset, FetchItems, messages)
 	}()
 
 	for msg := range messages {

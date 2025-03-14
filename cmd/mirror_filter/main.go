@@ -32,7 +32,7 @@ type Config struct {
 }
 
 func main() {
-	log.ConfigLogger(logrus.InfoLevel)
+	log.ConfigLogger(logrus.DebugLevel)
 	root := &cobra.Command{
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for {

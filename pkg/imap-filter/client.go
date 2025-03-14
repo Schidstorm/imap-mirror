@@ -3,6 +3,7 @@ package imap_filter
 import (
 	"errors"
 	"slices"
+	"sync"
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
@@ -13,8 +14,15 @@ import (
 var log *logrus.Logger = logrus.New()
 
 type FilterClient struct {
-	filters []Filter
-	client  *client.Client
+	filters    []Filter
+	client     *client.Client
+	closeChan  chan struct{}
+	closedWg   *sync.WaitGroup
+	applyTasks chan struct {
+		srcMailbox  string
+		msguid      uint32
+		destMailbox string
+	}
 }
 
 func NewFilterClient(filters ...Filter) *FilterClient {
@@ -32,8 +40,52 @@ func NewFilterClient(filters ...Filter) *FilterClient {
 		filters = append(filters[:i], filters[i+1:]...)
 	}
 
-	return &FilterClient{
-		filters: filters,
+	fc := &FilterClient{
+		filters:   filters,
+		closeChan: make(chan struct{}),
+		closedWg:  &sync.WaitGroup{},
+		applyTasks: make(chan struct {
+			srcMailbox  string
+			msguid      uint32
+			destMailbox string
+		}, 1024),
+	}
+
+	fc.closedWg.Add(1)
+	go fc.filterApplyer()
+	return fc
+}
+
+func (f *FilterClient) Close() {
+	close(f.closeChan)
+	f.closedWg.Wait()
+}
+
+func (f *FilterClient) filterApplyer() {
+	for {
+		select {
+		case <-f.closeChan:
+			f.closedWg.Done()
+			return
+		case task := <-f.applyTasks:
+			mb := f.client.Mailbox()
+			if mb.Name != task.srcMailbox {
+				_, err := f.client.Select(task.srcMailbox, false)
+				if err != nil {
+					log.WithError(err).Errorf("failed to select mailbox %s", task.srcMailbox)
+					continue
+				}
+			}
+
+			msgSeq := new(imap.SeqSet)
+			msgSeq.AddNum(task.msguid)
+			log.Infof("moving message %d from %s to %s", task.msguid, task.srcMailbox, task.destMailbox)
+			err := f.client.UidMove(msgSeq, task.destMailbox)
+			if err != nil {
+				log.WithError(err).Error("failed to move message")
+				continue
+			}
+		}
 	}
 }
 
@@ -67,24 +119,26 @@ func (f *FilterClient) applyResultToMessage(filterResult FilterResult, mailbox s
 		return nil
 	}
 
-	c := f.client
-	_, err := c.Select(mailbox, false)
-	if err != nil {
-		return err
-	}
-
 	msgSeq := new(imap.SeqSet)
 	msgSeq.AddNum(message)
 
 	if filterResult.Kind == FilterResultKindDelete {
-		log.Infof("deleting message %d from %s", message, mailbox)
-		return c.UidMove(msgSeq, "Spam.Shit")
+		f.applyTasks <- struct {
+			srcMailbox  string
+			msguid      uint32
+			destMailbox string
+		}{mailbox, message, "Spam.Shit"}
 	} else if filterResult.Kind == FilterResultKindMove {
-		log.Infof("moving message %d from %s to %s", message, mailbox, filterResult.Target)
-		return c.UidMove(msgSeq, filterResult.Target)
+		f.applyTasks <- struct {
+			srcMailbox  string
+			msguid      uint32
+			destMailbox string
+		}{mailbox, message, filterResult.Target}
 	} else {
 		return errors.New("failed to process unknown FilterResultKind")
 	}
+
+	return nil
 }
 
 func (f *FilterClient) FilterImap(mailbox string, imapMessage *imap.Message) FilterResult {
