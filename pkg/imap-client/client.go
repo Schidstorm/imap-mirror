@@ -16,7 +16,7 @@ import (
 
 const FetchBatchSize = 100
 const FetchBatchWaitTime = 500 * time.Millisecond
-const loopLimitTime = 1 * time.Minute
+const loopLimitTime = 2 * time.Second
 
 var FetchBodySection = imap.BodySectionName{}
 var FetchItems = []imap.FetchItem{
@@ -61,7 +61,6 @@ type Client struct {
 	stateDirectory    string
 	lastMessageOffset uint32
 	stateFile         string
-	closeChan         chan struct{}
 }
 
 func NewClient(stateFS FS, cfg Config, messageHandlers []HandleMessagePlugin) *Client {
@@ -78,7 +77,6 @@ func NewClient(stateFS FS, cfg Config, messageHandlers []HandleMessagePlugin) *C
 		messageHandlers:   messageHandlers,
 		lastMessageOffset: cfg.LastMessageOffset,
 		stateFile:         stateFile,
-		closeChan:         make(chan struct{}),
 		activeConnection: NewConnection(ConnectionParams{
 			ImapAddr:     cfg.ImapAddr,
 			ImapUsername: cfg.ImapUsername,
@@ -108,10 +106,6 @@ func (c *Client) open(log *logrus.Logger) error {
 }
 
 func (c *Client) Close() error {
-	c.closeChan <- struct{}{}
-	<-c.closeChan
-	close(c.closeChan)
-
 	for _, plugin := range c.messageHandlers {
 		if closer, ok := plugin.(io.Closer); ok {
 			closer.Close()
@@ -173,58 +167,38 @@ func limitCalls(lastCall *time.Time) {
 }
 
 func (c *Client) waitForMailboxUpdate(mailbox string) error {
+	const logoutTimeout = 1 * time.Minute
+
 	c.log.WithField("mailbox", mailbox).Info("waiting for mailbox update")
 	defer c.log.WithField("mailbox", mailbox).Info("mailbox updated")
 
-	_, err := c.idleConnection.GetClient().Select("INBOX", true)
+	_, err := c.idleConnection.GetClient().Select(mailbox, true)
 	if err != nil {
 		return err
 	}
 
 	updateChan := make(chan client.Update, 16)
 	c.idleConnection.GetClient().Updates = updateChan
-	defer close(updateChan)
 	defer func() {
 		c.idleConnection.GetClient().Updates = nil
-		drainChannel(updateChan)
+		close(updateChan)
 	}()
 
 	stopChan := make(chan struct{})
-
 	go func() {
 		defer close(stopChan)
 
-		for {
-			select {
-			case <-c.closeChan:
-				c.log.Debug("closing idle")
-				c.closeChan <- struct{}{}
+		for update := range updateChan {
+			switch update.(type) {
+			case *client.MailboxUpdate:
 				return
-			case update := <-updateChan:
-				switch update := update.(type) {
-				case *client.MailboxUpdate:
-					if update.Mailbox.Name == mailbox {
-						c.log.WithField("mailbox", mailbox).Info("mailbox updated")
-						return
-					}
-				default:
-					continue
-				}
+			default:
+				continue
 			}
 		}
 	}()
 
-	return c.idleConnection.GetClient().Idle(stopChan, &client.IdleOptions{LogoutTimeout: 0})
-}
-
-func drainChannel(ch chan client.Update) {
-	for {
-		select {
-		case <-ch:
-		default:
-			return
-		}
-	}
+	return c.idleConnection.GetClient().Idle(stopChan, &client.IdleOptions{LogoutTimeout: logoutTimeout})
 }
 
 func (c *Client) readState() error {
