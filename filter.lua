@@ -60,7 +60,11 @@ local rejectSenders = {
     "product-line.de",
     "info@ionos.de",
     "informer@daily.dev",
-    "traffic-meile.de"
+    "traffic-meile.de",
+    "nebenan.de",
+    "info@wickedcushions.com",
+    "mail@team.kodekloud.com",
+    "community@playdeltaforce.com"
 }
 
 local rejectSendersRegex = {
@@ -71,6 +75,9 @@ local rejectSubjects = {
     ".*news.*@.*",
     ".*Sichern +Sie +sich.*",
     "Diat",
+    "[s|S]ale",
+    "👍 ODER 👎",
+    "Studentenangebot"
 }
 
 local function assertEqual(a, b)

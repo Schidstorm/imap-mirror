@@ -1,7 +1,7 @@
 version = 1.0.6
 
 define smb
-	smbclient //$(shell yq '.cifsAddr' config.yml | cut -d: -f1)/$(1) --password "${SMB_PASSWORD}" -U "user" -c "$(2)"
+	smbclient //$(shell yq -r '.cifsAddr' config.yml | cut -d: -f1)/$(1) --password "${SMB_PASSWORD}" -U "user" -c "$(2)"
 endef
 
 all: build
