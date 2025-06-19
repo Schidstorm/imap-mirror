@@ -11,6 +11,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const operationTimeout = 30 * time.Second
+
 type CifsShare struct {
 	Connection net.Conn
 	Session    *smb2.Session
@@ -18,57 +20,71 @@ type CifsShare struct {
 }
 
 func (c CifsShare) Close() error {
-	if c.Share != nil {
-		c.Share.Umount()
-	}
-	if c.Session != nil {
-		c.Session.Logoff()
-	}
-	if c.Connection != nil {
-		c.Connection.Close()
-	}
+	failOnTimeout(func() {
+		if c.Share != nil {
+			c.Share.Umount()
+		}
+		if c.Session != nil {
+			c.Session.Logoff()
+		}
+		if c.Connection != nil {
+			c.Connection.Close()
+		}
+	})
 	return nil
 }
 
 func OpenCifsShare(config Config) (CifsShare, error) {
 	shareBundle := CifsShare{}
-	conn, err := net.Dial("tcp", config.CifsAddr)
-	if err != nil {
-		return shareBundle, err
-	}
-	shareBundle.Connection = conn
+	var returnErr error
 
-	d := &smb2.Dialer{
-		Initiator: &smb2.NTLMInitiator{
-			User:     config.CifsUsername,
-			Password: config.CifsPassword,
-		},
-	}
+	failOnTimeout(func() {
+		conn, err := net.Dial("tcp", config.CifsAddr)
+		if err != nil {
+			returnErr = err
+			return
+		}
+		shareBundle.Connection = conn
 
-	logrus.Infof("dialing %s", config.CifsAddr)
-	s, err := d.Dial(conn)
-	if err != nil {
-		return shareBundle, err
-	}
-	logrus.Infof("dialed %s", config.CifsAddr)
-	shareBundle.Session = s
+		d := &smb2.Dialer{
+			Initiator: &smb2.NTLMInitiator{
+				User:     config.CifsUsername,
+				Password: config.CifsPassword,
+			},
+		}
 
-	logrus.Infof("mounting %s", config.CifsShare)
-	fs, err := s.Mount(config.CifsShare)
-	if err != nil {
-		return shareBundle, err
-	}
-	shareBundle.Share = fs
-	logrus.Infof("mounted %s", config.CifsShare)
+		logrus.Infof("dialing %s", config.CifsAddr)
+		s, err := d.Dial(conn)
+		if err != nil {
+			returnErr = err
+			return
+		}
+		logrus.Infof("dialed %s", config.CifsAddr)
+		shareBundle.Session = s
 
-	return shareBundle, nil
+		logrus.Infof("mounting %s", config.CifsShare)
+		fs, err := s.Mount(config.CifsShare)
+		if err != nil {
+			returnErr = err
+			return
+		}
+		shareBundle.Share = fs
+		logrus.Infof("mounted %s", config.CifsShare)
+	})
+
+	return shareBundle, returnErr
 }
 
 func (c *CifsShare) ReadFile(file string) (string, error) {
-	fileContent, err := c.Share.ReadFile(file)
+	var fileContent []byte
+	var err error
+
+	failOnTimeout(func() {
+		fileContent, err = c.Share.ReadFile(file)
+	})
+
 	if err != nil {
 		logrus.WithError(err).Errorf("failed to read file %s", file)
-		return "", err
 	}
 
 	return string(fileContent), nil
@@ -77,7 +93,12 @@ func (c *CifsShare) ReadFile(file string) (string, error) {
 func (c *CifsShare) ListFiles(dir string) ([]string, error) {
 	var result []string
 
-	fileInfos, err := c.Share.ReadDir(dir)
+	var fileInfos []fs.FileInfo
+	var err error
+
+	failOnTimeout(func() {
+		fileInfos, err = c.Share.ReadDir(dir)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -99,40 +120,92 @@ func (c *CifsShare) ListFiles(dir string) ([]string, error) {
 }
 
 // implement FS interface
-func (c CifsShare) Open(name string) (fs.File, error) {
-	return c.Share.Open(name)
+func (c CifsShare) Open(name string) (f fs.File, err error) {
+	failOnTimeout(func() {
+		f, err = c.Share.Open(name)
+	})
+	return
 }
 
 func (c CifsShare) OpenFile(name string, flag int, perm os.FileMode) (fs.File, error) {
-	return c.Share.OpenFile(name, flag, perm)
+	var f fs.File
+	var err error
+	failOnTimeout(func() {
+		f, err = c.Share.OpenFile(name, flag, perm)
+	})
+	return f, err
 }
 
 func (c CifsShare) MkdirAll(name string, perm os.FileMode) error {
-	return c.Share.MkdirAll(name, perm)
+	var err error
+	failOnTimeout(func() {
+		err = c.Share.MkdirAll(name, perm)
+	})
+	return err
 }
 
 func (c CifsShare) WriteFile(name string, data []byte, perm os.FileMode) error {
-	return c.Share.WriteFile(name, data, perm)
+	var err error
+	failOnTimeout(func() {
+		err = c.Share.WriteFile(name, data, perm)
+	})
+	return err
 }
 
 func (c CifsShare) Chtimes(name string, atime time.Time, mtime time.Time) error {
-	return c.Share.Chtimes(name, atime, mtime)
+	var err error
+	failOnTimeout(func() {
+		err = c.Share.Chtimes(name, atime, mtime)
+	})
+	return err
 }
 
 func (c CifsShare) Rename(oldpath, newpath string) error {
 	// a file must be created before it can be renamed
-	content, err := c.Share.ReadFile(oldpath)
+	var content []byte
+	var err error
+	failOnTimeout(func() {
+		content, err = c.Share.ReadFile(oldpath)
+	})
 	if err != nil {
 		return err
 	}
 
-	return c.Share.WriteFile(newpath, content, os.ModePerm)
+	failOnTimeout(func() {
+		err = c.Share.WriteFile(newpath, content, os.ModePerm)
+	})
+	return err
 }
 
 func (c CifsShare) Remove(name string) error {
-	return c.Share.Remove(name)
+	var err error
+	failOnTimeout(func() {
+		err = c.Share.Remove(name)
+	})
+	return err
 }
 
 func (c CifsShare) Stat(name string) (fs.FileInfo, error) {
-	return c.Share.Stat(name)
+	var info fs.FileInfo
+	var err error
+	failOnTimeout(func() {
+		info, err = c.Share.Stat(name)
+	})
+	return info, err
+}
+
+func failOnTimeout(f func()) {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		f()
+	}()
+
+	select {
+	case <-done:
+		return
+	case <-time.After(operationTimeout):
+		panic("operation timed out")
+	}
 }
