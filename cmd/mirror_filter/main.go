@@ -50,7 +50,7 @@ func main() {
 					if errors.Is(err, client.ErrNotLoggedIn) {
 						log.Log().Info("IMAP client not logged in, retrying in 5 seconds")
 						time.Sleep(5 * time.Second)
-						break
+						continue
 					}
 
 					log.Log().Error(err)
