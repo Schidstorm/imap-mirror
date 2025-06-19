@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -10,6 +11,7 @@ import (
 	imapclient "git.schidlow.ski/gitea/imap-mirror/pkg/imap-client"
 	imap_filter "git.schidlow.ski/gitea/imap-mirror/pkg/imap-filter"
 	"git.schidlow.ski/gitea/imap-mirror/pkg/log"
+	"github.com/emersion/go-imap/client"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
@@ -45,6 +47,12 @@ func main() {
 
 				err = daemon(cfg)
 				if err != nil {
+					if errors.Is(err, client.ErrNotLoggedIn) {
+						log.Log().Info("IMAP client not logged in, retrying in 5 seconds")
+						time.Sleep(5 * time.Second)
+						break
+					}
+
 					log.Log().Error(err)
 				}
 
