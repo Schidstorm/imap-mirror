@@ -371,8 +371,11 @@ func (c *Client) handleMessage(mailbox string, message *imap.Message) {
 	log := logrus.WithField("mailbox", mailbox)
 	if message != nil && message.Envelope != nil {
 		log = log.WithField("subject", message.Envelope.Subject)
+		log.Info("received message")
+	} else {
+		log.Info("skipping message")
+		return
 	}
-	log.Info("received message")
 
 	for _, handleMessagePlugin := range c.messageHandlers {
 		handleMessagePlugin.HandleMessage(mailbox, message)
