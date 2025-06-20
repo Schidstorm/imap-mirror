@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -10,9 +9,8 @@ import (
 	imap_backup "git.schidlow.ski/gitea/imap-mirror/pkg/imap-backup"
 	imapclient "git.schidlow.ski/gitea/imap-mirror/pkg/imap-client"
 	imap_filter "git.schidlow.ski/gitea/imap-mirror/pkg/imap-filter"
-	"git.schidlow.ski/gitea/imap-mirror/pkg/log"
-	"github.com/emersion/go-imap/client"
-	"github.com/sirupsen/logrus"
+	logger "git.schidlow.ski/gitea/imap-mirror/pkg/log"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 )
@@ -34,26 +32,20 @@ type Config struct {
 }
 
 func main() {
-	log.ConfigLogger(logrus.DebugLevel)
+	logger.Configure(log.DebugLevel)
 	root := &cobra.Command{
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for {
 				cfg, err := loadConfig(cmd.Flag("config.file").Value.String())
 				if err != nil {
-					log.Log().WithError(err).Error("Failed to load config. Retrying in 5 seconds")
+					log.WithError(err).Error("Failed to load config. Retrying in 5 seconds")
 					time.Sleep(5 * time.Second)
 					continue
 				}
 
 				err = daemon(cfg)
 				if err != nil {
-					if errors.Is(err, client.ErrNotLoggedIn) {
-						log.Log().Info("IMAP client not logged in, retrying in 5 seconds")
-						time.Sleep(5 * time.Second)
-						continue
-					}
-
-					log.Log().Error(err)
+					log.Error(err)
 				}
 
 				if cfg.RunPeriode == nil || *cfg.RunPeriode == 0 {
@@ -105,7 +97,7 @@ func main() {
 
 	err := root.Execute()
 	if err != nil {
-		log.Log().Error(err)
+		log.Error(err)
 	}
 }
 
@@ -154,7 +146,7 @@ func daemon(cfg Config) (resultErr error) {
 }
 
 func runClient(cifsShare cifs.CifsShare, cfg Config) error {
-	log.Log().Info("Running client")
+	log.Info("Running client")
 
 	filterClient := imap_filter.NewFilterClient(
 		imap_filter.NewLuaFilter(cfg.LuaFilterConfig, func(dir string) ([]string, error) {
@@ -175,12 +167,12 @@ func runClient(cifsShare cifs.CifsShare, cfg Config) error {
 	}, []imapclient.HandleMessagePlugin{backupClient, filterClient})
 	defer client.Close()
 
-	err := client.Open(log.Log())
+	err := client.Open()
 	if err != nil {
 		return err
 	}
 
-	filterClient.SetClient(client.GetImapClient())
+	filterClient.SetConnection(client.GetConnection())
 
-	return client.Run(log.Log())
+	return client.Run()
 }

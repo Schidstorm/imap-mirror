@@ -5,17 +5,15 @@ import (
 	"slices"
 	"sync"
 
+	imap_client "git.schidlow.ski/gitea/imap-mirror/pkg/imap-client"
 	"github.com/emersion/go-imap"
-	"github.com/emersion/go-imap/client"
 	"github.com/sg3des/eml"
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
-
-var log *logrus.Logger = logrus.New()
 
 type FilterClient struct {
 	filters    []Filter
-	client     *client.Client
+	client     *imap_client.Connection
 	closeChan  chan struct{}
 	closedWg   *sync.WaitGroup
 	applyTasks chan struct {
@@ -89,7 +87,7 @@ func (f *FilterClient) filterApplyer() {
 	}
 }
 
-func (f *FilterClient) SetClient(c *client.Client) {
+func (f *FilterClient) SetConnection(c *imap_client.Connection) {
 	f.client = c
 }
 

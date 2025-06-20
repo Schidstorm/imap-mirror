@@ -6,8 +6,8 @@ import (
 	"git.schidlow.ski/gitea/imap-mirror/pkg/cifs"
 	imapclient "git.schidlow.ski/gitea/imap-mirror/pkg/imap-client"
 	imap_filter "git.schidlow.ski/gitea/imap-mirror/pkg/imap-filter"
-	"git.schidlow.ski/gitea/imap-mirror/pkg/log"
-	"github.com/sirupsen/logrus"
+	logger "git.schidlow.ski/gitea/imap-mirror/pkg/log"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 )
@@ -19,7 +19,7 @@ type Config struct {
 }
 
 func main() {
-	log.ConfigLogger(logrus.InfoLevel)
+	logger.Configure(log.InfoLevel)
 	root := &cobra.Command{
 		RunE: func(cmd *cobra.Command, args []string) error {
 			configFilePath, err := cmd.Flags().GetString("config.file")
@@ -59,16 +59,16 @@ func main() {
 
 			client := imapclient.NewClient(cifsShare, cfg.ClientConfig, []imapclient.HandleMessagePlugin{filterClient})
 			defer client.Close()
-			err = client.Open(log.Log())
+			err = client.Open()
 			if err != nil {
 				return err
 			}
 
-			filterClient.SetClient(client.GetImapClient())
+			filterClient.SetConnection(client.GetConnection())
 
-			err = client.Run(log.Log())
+			err = client.Run()
 			if err != nil {
-				log.Log().Error(err)
+				log.Error(err)
 			}
 
 			return nil
@@ -112,6 +112,6 @@ func main() {
 
 	err := root.Execute()
 	if err != nil {
-		log.Log().Error(err)
+		log.Error(err)
 	}
 }

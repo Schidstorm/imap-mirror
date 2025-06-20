@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	lua "github.com/yuin/gopher-lua"
 )
 
@@ -227,7 +227,7 @@ func marchalToLValue(L *lua.LState, mail interface{}) lua.LValue {
 
 func marchalToLValueDepth(L *lua.LState, mail interface{}, depth int32) lua.LValue {
 	if depth > 100 {
-		logrus.Error("max depth reached")
+		log.Error("max depth reached")
 		return lua.LNil
 	}
 
@@ -301,7 +301,7 @@ func marchalToLValueDepth(L *lua.LState, mail interface{}, depth int32) lua.LVal
 		return lua.LNumber(mail.(int64))
 
 	default:
-		logrus.WithField("type", t.Kind()).Error("unsupported type")
+		log.WithField("type", t.Kind()).Error("unsupported type")
 		return lua.LNil
 	}
 }

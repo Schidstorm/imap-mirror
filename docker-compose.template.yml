@@ -2,7 +2,7 @@ version: '3.7'
 
 services:
   imap_mirror:
-    image: necromant/imap_mirror:1.0.10
+    image: necromant/imap_mirror:VERSION
 
     volumes:
       - ./email_backup_config.yml:/home/mirror_filter/config.yml:ro

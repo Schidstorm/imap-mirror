@@ -11,7 +11,7 @@ import (
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	"github.com/hack-pad/hackpadfs"
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
 
 const FetchBatchSize = 100
@@ -53,7 +53,6 @@ type Config struct {
 type Client struct {
 	activeConnection  *Connection
 	idleConnection    *Connection
-	log               *logrus.Logger
 	config            Config
 	messageHandlers   []HandleMessagePlugin
 	state             *State
@@ -90,13 +89,11 @@ func NewClient(stateFS FS, cfg Config, messageHandlers []HandleMessagePlugin) *C
 	}
 }
 
-func (c *Client) GetImapClient() *client.Client {
-	return c.activeConnection.GetClient()
-}
+// func (c *Client) GetImapClient() *client.Client {
+// 	return c.activeConnection.GetClient()
+// }
 
-func (c *Client) open(log *logrus.Logger) error {
-	c.log = log
-
+func (c *Client) open() error {
 	err := c.idleConnection.Open()
 	if err != nil {
 		return err
@@ -123,16 +120,16 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) Open(log *logrus.Logger) error {
-	return c.open(log)
+func (c *Client) Open() error {
+	return c.open()
 }
 
-func (c *Client) Run(log *logrus.Logger) error {
+func (c *Client) Run() error {
 	lastLoopRun := time.Now()
 
 	for {
-		c.log.Info("starting loop")
-		mailboxes, err := c.listMailboxNames(c.activeConnection.GetClient())
+		log.Info("starting loop")
+		mailboxes, err := c.listMailboxNames(c.activeConnection)
 		if err != nil {
 			return err
 		}
@@ -145,14 +142,14 @@ func (c *Client) Run(log *logrus.Logger) error {
 		for _, mbName := range mailboxes {
 			err = c.runOnMailbox(mbName)
 			if err != nil {
-				c.log.WithField("mailbox", mbName).Error(err)
+				log.WithField("mailbox", mbName).Error(err)
 				continue
 			}
 		}
 
 		err = c.waitForMailboxUpdate("INBOX")
 		if err != nil {
-			c.log.WithError(err).Error("failed to wait for mailbox update. sleeping for 1 hour")
+			log.WithError(err).Error("failed to wait for mailbox update. sleeping for 1 hour")
 			time.Sleep(1 * time.Hour)
 			continue
 		}
@@ -169,18 +166,18 @@ func limitCalls(lastCall *time.Time) {
 func (c *Client) waitForMailboxUpdate(mailbox string) error {
 	const logoutTimeout = 1 * time.Minute
 
-	c.log.WithField("mailbox", mailbox).Info("waiting for mailbox update")
-	defer c.log.WithField("mailbox", mailbox).Info("mailbox updated")
+	log.WithField("mailbox", mailbox).Info("waiting for mailbox update")
+	defer log.WithField("mailbox", mailbox).Info("mailbox updated")
 
-	_, err := c.idleConnection.GetClient().Select(mailbox, true)
+	_, err := c.idleConnection.Select(mailbox, true)
 	if err != nil {
 		return err
 	}
 
 	updateChan := make(chan client.Update, 16)
-	c.idleConnection.GetClient().Updates = updateChan
+	c.idleConnection.SetUpdates(updateChan)
 	defer func() {
-		c.idleConnection.GetClient().Updates = nil
+		c.idleConnection.SetUpdates(nil)
 		close(updateChan)
 	}()
 
@@ -198,7 +195,7 @@ func (c *Client) waitForMailboxUpdate(mailbox string) error {
 		}
 	}()
 
-	return c.idleConnection.GetClient().Idle(stopChan, &client.IdleOptions{LogoutTimeout: logoutTimeout})
+	return c.idleConnection.Idle(stopChan, &client.IdleOptions{LogoutTimeout: logoutTimeout})
 }
 
 func (c *Client) readState() error {
@@ -214,19 +211,19 @@ func (c *Client) readState() error {
 			if err == nil {
 				return nil
 			} else {
-				logrus.WithError(err).Warn("failed to read/parse state file")
+				log.WithError(err).Warn("failed to read/parse state file")
 			}
 		} else {
 			if os.IsNotExist(err) {
 				stateDoesNotExists = true
-				logrus.WithError(err).Info("state file does not exist")
+				log.WithError(err).Info("state file does not exist")
 			} else {
-				logrus.WithError(err).Warn("failed to open state file")
+				log.WithError(err).Warn("failed to open state file")
 			}
 		}
 	}
 
-	logrus.Warn("continuing with backup file")
+	log.Warn("continuing with backup file")
 
 	{ // try to read from backup file
 		backupStateFile, err := c.stateFS.OpenFile(backupFilePath, os.O_RDONLY, os.ModePerm)
@@ -236,30 +233,30 @@ func (c *Client) readState() error {
 			if err == nil {
 				return nil
 			} else {
-				logrus.WithError(err).Error("failed to read/parse backup file")
+				log.WithError(err).Error("failed to read/parse backup file")
 				return err
 			}
 		} else {
 			if os.IsNotExist(err) {
 				if stateDoesNotExists {
-					logrus.WithError(err).Info("backup file does not exist. assuming blank state")
+					log.WithError(err).Info("backup file does not exist. assuming blank state")
 					return nil
 				}
 			}
 
-			logrus.WithError(err).Error("failed to open backup file")
+			log.WithError(err).Error("failed to open backup file")
 			return err
 		}
 	}
 }
 
 func (c *Client) runOnMailbox(mailboxName string) error {
-	c.log.WithField("mailbox", mailboxName).Info("processing mailbox")
+	log.WithField("mailbox", mailboxName).Info("processing mailbox")
 	if !c.state.Mailboxes.HasMailbox(mailboxName) {
 		return c.fetchAllMessages(mailboxName)
 	}
 
-	mbStatus, err := c.activeConnection.GetClient().Status(mailboxName, []imap.StatusItem{imap.StatusUidValidity})
+	mbStatus, err := c.activeConnection.Status(mailboxName, []imap.StatusItem{imap.StatusUidValidity})
 	if err != nil {
 		return err
 	}
@@ -273,7 +270,7 @@ func (c *Client) runOnMailbox(mailboxName string) error {
 }
 
 func (c *Client) fetchAllMessages(mailbox string) error {
-	mbStatus, err := c.activeConnection.GetClient().Select(mailbox, true)
+	mbStatus, err := c.activeConnection.Select(mailbox, true)
 	if err != nil {
 		return err
 	}
@@ -282,7 +279,7 @@ func (c *Client) fetchAllMessages(mailbox string) error {
 	state.SavedUidValidity = mbStatus.UidValidity
 
 	for i := uint32(1); i < mbStatus.Messages; i += FetchBatchSize {
-		err = c.fetchBatched(c.activeConnection.GetClient(), i, FetchBatchSize)
+		err = c.fetchBatched(c.activeConnection, i, FetchBatchSize)
 		if err != nil {
 			return err
 		}
@@ -294,7 +291,7 @@ func (c *Client) fetchAllMessages(mailbox string) error {
 }
 
 func (c *Client) fetchUids(mailbox string, uidBegin uint32) error {
-	mbStatus, err := c.activeConnection.GetClient().Select(mailbox, true)
+	mbStatus, err := c.activeConnection.Select(mailbox, true)
 	state := c.state.Mailboxes.Mailbox(mailbox)
 	state.SavedUidValidity = mbStatus.UidValidity
 	if err != nil {
@@ -312,7 +309,7 @@ func (c *Client) fetchUids(mailbox string, uidBegin uint32) error {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- c.activeConnection.GetClient().UidFetch(seqset, FetchItems, messages)
+		done <- c.activeConnection.UidFetch(seqset, FetchItems, messages)
 	}()
 
 	for msg := range messages {
@@ -328,7 +325,7 @@ func (c *Client) fetchUids(mailbox string, uidBegin uint32) error {
 	return <-done
 }
 
-func (c *Client) fetchBatched(imapClient *client.Client, begin uint32, length uint32) error {
+func (c *Client) fetchBatched(conn *Connection, begin uint32, length uint32) error {
 	seqset := new(imap.SeqSet)
 	seqset.AddRange(begin, begin+length)
 
@@ -336,10 +333,10 @@ func (c *Client) fetchBatched(imapClient *client.Client, begin uint32, length ui
 	done := make(chan error, 1)
 
 	go func() {
-		done <- imapClient.Fetch(seqset, FetchItems, messages)
+		done <- conn.Fetch(seqset, FetchItems, messages)
 	}()
 
-	mb := imapClient.Mailbox()
+	mb := conn.Mailbox()
 	mbName := ""
 	if mb != nil {
 		mbName = mb.Name
@@ -352,11 +349,11 @@ func (c *Client) fetchBatched(imapClient *client.Client, begin uint32, length ui
 	return <-done
 }
 
-func (c *Client) listMailboxNames(imapClient *client.Client) ([]string, error) {
+func (c *Client) listMailboxNames(conn *Connection) ([]string, error) {
 	mailboxChannel := make(chan *imap.MailboxInfo, 10)
 	done := make(chan error, 1)
 	go func() {
-		done <- imapClient.List("", "*", mailboxChannel)
+		done <- conn.List("", "*", mailboxChannel)
 	}()
 
 	var mailboxes []string
@@ -368,7 +365,7 @@ func (c *Client) listMailboxNames(imapClient *client.Client) ([]string, error) {
 }
 
 func (c *Client) handleMessage(mailbox string, message *imap.Message) {
-	log := logrus.WithField("mailbox", mailbox)
+	log := log.WithField("mailbox", mailbox)
 	if message != nil && message.Envelope != nil {
 		log = log.WithField("subject", message.Envelope.Subject)
 		log.Info("received message")
@@ -385,7 +382,7 @@ func (c *Client) handleMessage(mailbox string, message *imap.Message) {
 
 	err := c.updateStateFile()
 	if err != nil {
-		logrus.Error(err)
+		log.Error(err)
 	}
 }
 
@@ -442,4 +439,8 @@ func (c Client) stateFiles() (stateFile, backupFile, tmpFile string) {
 	backupFile = stateFile + ".backup"
 	tmpFile = stateFile + ".tmp"
 	return
+}
+
+func (c Client) GetConnection() *Connection {
+	return c.activeConnection
 }

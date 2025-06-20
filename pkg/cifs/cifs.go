@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/hirochachacha/go-smb2"
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
 
 const operationTimeout = 30 * time.Second
@@ -53,23 +53,23 @@ func OpenCifsShare(config Config) (CifsShare, error) {
 			},
 		}
 
-		logrus.Infof("dialing %s", config.CifsAddr)
+		log.Infof("dialing %s", config.CifsAddr)
 		s, err := d.Dial(conn)
 		if err != nil {
 			returnErr = err
 			return
 		}
-		logrus.Infof("dialed %s", config.CifsAddr)
+		log.Infof("dialed %s", config.CifsAddr)
 		shareBundle.Session = s
 
-		logrus.Infof("mounting %s", config.CifsShare)
+		log.Infof("mounting %s", config.CifsShare)
 		fs, err := s.Mount(config.CifsShare)
 		if err != nil {
 			returnErr = err
 			return
 		}
 		shareBundle.Share = fs
-		logrus.Infof("mounted %s", config.CifsShare)
+		log.Infof("mounted %s", config.CifsShare)
 	})
 
 	return shareBundle, returnErr
@@ -84,7 +84,7 @@ func (c *CifsShare) ReadFile(file string) (string, error) {
 	})
 
 	if err != nil {
-		logrus.WithError(err).Errorf("failed to read file %s", file)
+		log.WithError(err).Errorf("failed to read file %s", file)
 	}
 
 	return string(fileContent), nil
@@ -109,7 +109,7 @@ func (c *CifsShare) ListFiles(dir string) ([]string, error) {
 		} else {
 			subDirFiles, err := c.ListFiles(path.Join(dir, fileInfo.Name()))
 			if err != nil {
-				logrus.WithError(err).Errorf("failed to list files in %s", path.Join(dir, fileInfo.Name()))
+				log.WithError(err).Errorf("failed to list files in %s", path.Join(dir, fileInfo.Name()))
 				continue
 			}
 			result = append(result, subDirFiles...)

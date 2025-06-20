@@ -13,7 +13,7 @@ import (
 
 	"github.com/emersion/go-imap"
 	"github.com/hack-pad/hackpadfs"
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
 
 type FS interface {
@@ -44,7 +44,7 @@ func NewImapBackup(fileSystem FS, cfg Config) *ImapBackup {
 func (i *ImapBackup) HandleMessage(mailbox string, message *imap.Message) {
 	err := i.SaveMessage(mailbox, message, i.fileSystem, i.backupDir)
 	if err != nil {
-		logrus.Error(err)
+		log.Error(err)
 		return
 	}
 
@@ -94,7 +94,7 @@ func GetPathOfMessage(mailbox string, message *imap.Message) string {
 		}
 	}
 
-	replaceRegex := regexp.MustCompile("[^a-zA-Z\\d_\\-]")
+	replaceRegex := regexp.MustCompile(`[^a-zA-Z\d_\-]`)
 
 	return fmt.Sprintf("%s/%s.eml", mailbox, replaceRegex.ReplaceAllString(secureString.String(), "_"))
 }
