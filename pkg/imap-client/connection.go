@@ -25,10 +25,6 @@ func NewConnection(params ConnectionParams) *Connection {
 }
 
 func (c *Connection) Open() error {
-	if c.imapClient != nil {
-		c.Close()
-	}
-
 	imapClient, err := client.DialTLS(c.params.ImapAddr, nil)
 	if err != nil {
 		return err
@@ -46,7 +42,7 @@ func (c *Connection) Close() error {
 
 	c.imapClient = nil
 	client.Logout()
-	return client.Close()
+	return client.Terminate()
 }
 
 // func (c *Connection) GetClient() *client.Client {
@@ -58,7 +54,8 @@ func (c *Connection) State() imap.ConnState {
 }
 
 func (c *Connection) Status(name string, items []imap.StatusItem) (result *imap.MailboxStatus, err error) {
-	err = c.call(func() error {
+	_, err = try2simplifyAutoRelogin(c, func(data chan any) error {
+		defer close(data)
 		result, err = c.imapClient.Status(name, items)
 		return err
 	})
@@ -71,7 +68,8 @@ func (c *Connection) Mailbox() *imap.MailboxStatus {
 }
 
 func (c *Connection) Select(name string, readOnly bool) (result *imap.MailboxStatus, err error) {
-	err = c.call(func() error {
+	_, err = try2simplifyAutoRelogin(c, func(data chan any) error {
+		defer close(data)
 		result, err = c.imapClient.Select(name, readOnly)
 		return err
 	})
@@ -87,66 +85,89 @@ func (c *Connection) Select(name string, readOnly bool) (result *imap.MailboxSta
 }
 
 func (c *Connection) Create(name string) error {
-	return c.call(func() error {
+	_, err := try2simplifyAutoRelogin(c, func(data chan any) error {
+		defer close(data)
 		return c.imapClient.Create(name)
 	})
+	return err
 }
 
 func (c *Connection) Delete(name string) error {
-	return c.call(func() error {
+	_, err := try2simplifyAutoRelogin(c, func(data chan any) error {
+		defer close(data)
 		return c.imapClient.Delete(name)
 	})
+	return err
 }
 
 func (c *Connection) Rename(oldName, newName string) error {
-	return c.call(func() error {
+	_, err := try2simplifyAutoRelogin(c, func(data chan any) error {
+		defer close(data)
 		return c.imapClient.Rename(oldName, newName)
 	})
+	return err
 }
 
-func (c *Connection) List(ref, name string, ch chan *imap.MailboxInfo) error {
-	return c.call(func() error {
+func (c *Connection) List(ref, name string) ([]*imap.MailboxInfo, error) {
+	return try2simplifyAutoRelogin(c, func(ch chan *imap.MailboxInfo) error {
 		return c.imapClient.List(ref, name, ch)
 	})
 }
 
-func (c *Connection) UidFetch(seqset *imap.SeqSet, items []imap.FetchItem, ch chan *imap.Message) error {
-	return c.call(func() error {
+func (c *Connection) UidFetch(seqset *imap.SeqSet, items []imap.FetchItem) ([]*imap.Message, error) {
+	return try2simplifyAutoRelogin(c, func(ch chan *imap.Message) error {
 		return c.imapClient.UidFetch(seqset, items, ch)
 	})
 }
 
 func (c *Connection) UidMove(seqset *imap.SeqSet, dest string) error {
-	return c.call(func() error {
+	_, err := try2simplifyAutoRelogin(c, func(data chan any) error {
+		defer close(data)
 		return c.imapClient.UidMove(seqset, dest)
 	})
+	return err
 }
 
-func (c *Connection) Fetch(seqset *imap.SeqSet, items []imap.FetchItem, ch chan *imap.Message) error {
-	return c.call(func() error {
-		return c.imapClient.Fetch(seqset, items, ch)
+func (c *Connection) Fetch(seqset *imap.SeqSet, items []imap.FetchItem) ([]*imap.Message, error) {
+	return try2simplifyAutoRelogin(c, func(data chan *imap.Message) error {
+		return c.imapClient.Fetch(seqset, items, data)
 	})
 }
 
 func (c *Connection) Idle(stop <-chan struct{}, opts *client.IdleOptions) error {
-	return c.call(func() error {
+	_, err := try2simplifyAutoRelogin(c, func(data chan any) error {
+		defer close(data)
 		return c.imapClient.Idle(stop, opts)
 	})
+	return err
 }
 
-func (c *Connection) call(f func() error) error {
-	err := f()
+func try2simplifyAutoRelogin[T any](c *Connection, f func(chan T) error) ([]T, error) {
+	res, err := try2simplify(f)
 	if err == client.ErrNotLoggedIn {
+		c.imapClient.Terminate()
 		err = c.Open()
 		if err == nil {
-			return c.call(f)
+			return try2simplifyAutoRelogin(c, f)
 		}
 	}
-	if err != nil {
-		return err
+
+	return res, err
+}
+
+func try2simplify[T any](f func(chan T) error) ([]T, error) {
+	resultChannel := make(chan T, 10)
+	done := make(chan error, 1)
+	go func() {
+		done <- f(resultChannel)
+	}()
+
+	var resultList []T
+	for item := range resultChannel {
+		resultList = append(resultList, item)
 	}
 
-	return nil
+	return resultList, <-done
 }
 
 func (c Connection) GetUpdates() chan<- client.Update {

@@ -1,4 +1,4 @@
-version = 1.0.12
+version = 1.0.15
 
 define smb
 	smbclient //$(shell yq -r '.cifsAddr' config.yml | cut -d: -f1)/$(1) --password "${SMB_PASSWORD}" -U "user" -c "$(2)"
@@ -15,7 +15,7 @@ test:
 	go run ./cmd/test/
 
 docker_compose_yml: check_env
-	rm docker-compose.yml && sed "s/VERSION/$(version)/g" docker-compose.template.yml > docker-compose.yml && \
+	( rm docker-compose.yml || true ) && sed "s/VERSION/$(version)/g" docker-compose.template.yml > docker-compose.yml && \
 	$(call smb,docker,put docker-compose.yml projects\\imap_mirror\\docker-compose.yml)
 
 config_yml: check_env

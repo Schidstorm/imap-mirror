@@ -305,14 +305,12 @@ func (c *Client) fetchUids(mailbox string, uidBegin uint32) error {
 	}
 	seqset.AddRange(offsettedUidBegin, 0)
 
-	messages := make(chan *imap.Message, 10)
-	done := make(chan error, 1)
+	messages, err := c.activeConnection.UidFetch(seqset, FetchItems)
+	if err != nil {
+		return fmt.Errorf("failed to fetch messages: %w", err)
+	}
 
-	go func() {
-		done <- c.activeConnection.UidFetch(seqset, FetchItems, messages)
-	}()
-
-	for msg := range messages {
+	for _, msg := range messages {
 		// skip over first message because it was the last message on the last run
 		if c.lastMessageOffset == 0 && state.SavedLastUid == msg.Uid {
 			continue
@@ -322,19 +320,17 @@ func (c *Client) fetchUids(mailbox string, uidBegin uint32) error {
 		c.handleMessage(mailbox, msg)
 	}
 
-	return <-done
+	return nil
 }
 
 func (c *Client) fetchBatched(conn *Connection, begin uint32, length uint32) error {
 	seqset := new(imap.SeqSet)
 	seqset.AddRange(begin, begin+length)
 
-	messages := make(chan *imap.Message, 10)
-	done := make(chan error, 1)
-
-	go func() {
-		done <- conn.Fetch(seqset, FetchItems, messages)
-	}()
+	messages, err := conn.Fetch(seqset, FetchItems)
+	if err != nil {
+		return fmt.Errorf("failed to fetch messages: %w", err)
+	}
 
 	mb := conn.Mailbox()
 	mbName := ""
@@ -342,26 +338,25 @@ func (c *Client) fetchBatched(conn *Connection, begin uint32, length uint32) err
 		mbName = mb.Name
 	}
 
-	for msg := range messages {
+	for _, msg := range messages {
 		c.handleMessage(mbName, msg)
 	}
 
-	return <-done
+	return nil
 }
 
 func (c *Client) listMailboxNames(conn *Connection) ([]string, error) {
-	mailboxChannel := make(chan *imap.MailboxInfo, 10)
-	done := make(chan error, 1)
-	go func() {
-		done <- conn.List("", "*", mailboxChannel)
-	}()
-
-	var mailboxes []string
-	for mb := range mailboxChannel {
-		mailboxes = append(mailboxes, mb.Name)
+	mailboxes, err := conn.List("", "*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list mailboxes: %w", err)
 	}
 
-	return mailboxes, <-done
+	var mailboxNames []string
+	for _, mb := range mailboxes {
+		mailboxNames = append(mailboxNames, mb.Name)
+	}
+
+	return mailboxNames, nil
 }
 
 func (c *Client) handleMessage(mailbox string, message *imap.Message) {
