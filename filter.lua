@@ -69,6 +69,7 @@ local rejectSenders = {
     "tiscali.it",
     "promotion@aliexpress.com",
     "workwise.com",
+    "workwise.io",
     "kundenservice.vodafone.com",
     "@microsoftstore.microsoft.com",
     "aliexpress.com",
@@ -78,7 +79,8 @@ local rejectSenders = {
     "eff.org",
     "startnext.com",
     "1und1.de",
-    "promotion"
+    "promotion",
+    "news2you.de"
 }
 
 local rejectSendersRegex = {

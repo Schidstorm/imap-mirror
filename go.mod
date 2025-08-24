@@ -1,8 +1,6 @@
 module git.schidlow.ski/gitea/imap-mirror
 
-go 1.23.0
-
-toolchain go1.24.5
+go 1.24.5
 
 require (
 	github.com/emersion/go-imap v1.2.1
