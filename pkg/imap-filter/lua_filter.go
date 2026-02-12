@@ -2,6 +2,7 @@ package imap_filter
 
 import (
 	"fmt"
+	"os"
 	"path"
 	"reflect"
 	"slices"
@@ -20,7 +21,6 @@ type LuaFilterConfig struct {
 
 type LuaFilter struct {
 	scriptsDir string
-	luaFiles   []string
 	luaStates  []*lua.LState
 	lsFiles    lsFilesFunc
 	readFile   readFileFunc
@@ -44,31 +44,38 @@ func (f *LuaFilter) Close() {
 }
 
 func (f *LuaFilter) Init() error {
-	files, err := f.lsFiles(f.scriptsDir)
+	files, err := os.ReadDir(f.scriptsDir)
 	if err != nil {
 		log.WithError(err).Error("failed to list files")
 		return nil
 	}
 
-	files = filterStrings(files, func(s string) bool {
+	filePaths := make([]string, len(files))
+	for i, file := range files {
+		filePaths[i] = path.Join(f.scriptsDir, file.Name())
+	}
+
+	filePaths = filterStrings(filePaths, func(s string) bool {
 		return path.Ext(s) == ".lua"
 	})
 
-	slices.Sort(files)
-	f.luaFiles = files
+	slices.Sort(filePaths)
+	luaFiles := filePaths
 
-	for _, luaFile := range f.luaFiles {
-		luaFileContents, err := f.readFile(luaFile)
+	for _, luaFile := range luaFiles {
+		luaFileContents, err := os.ReadFile(luaFile)
 		if err != nil {
 			log.WithError(err).Errorf("failed to read file %s", luaFile)
 			continue
 		}
 
-		l, err := f.initLuaState(luaFileContents)
+		l, err := f.initLuaState(string(luaFileContents))
 		if err != nil {
 			log.WithError(err).Errorf("failed to init lua state for file %s", luaFile)
 			continue
 		}
+
+		log.Infof("loaded filter %s", luaFile)
 
 		f.luaStates = append(f.luaStates, l)
 	}
@@ -101,12 +108,12 @@ func checkFuncExistance(l *lua.LState, name string) (err error) {
 	fnc := l.G.Global.RawGet(lua.LString(name))
 
 	if fnc == lua.LNil {
-		err = fmt.Errorf(name + " not found")
+		err = fmt.Errorf("%s not found", name)
 		return
 	}
 
 	if fnc.Type() != lua.LTFunction {
-		err = fmt.Errorf(name + " is not a function")
+		err = fmt.Errorf("%s is not a function", name)
 		return
 	}
 

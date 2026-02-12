@@ -1,4 +1,4 @@
-version = 1.0.18
+version = 1.0.19
 
 define smb
 	smbclient //$(shell yq -r '.cifsAddr' config.yml | cut -d: -f1)/$(1) --password "${SMB_PASSWORD}" -U "user" -c "$(2)"
@@ -7,7 +7,7 @@ endef
 all: build copy
 
 build:
-	docker build --push -t necromant/imap_mirror:$(version) . && docker save necromant/imap_mirror:$(version) > necromant_imap_mirror.tar
+	docker build -t necromant/imap_mirror:$(version) .
 
 copy: test docker_compose_yml config_yml filter_lua
 
