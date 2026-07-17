@@ -4,7 +4,7 @@ This file is a small working checklist for maintaining `filter.lua`.
 
 ## Goal
 
-Refresh the local mail dump, inspect recent inbox spam, update `filter.lua`, and clean up the generated dump afterwards.
+Refresh the local mail dump, inspect inbox spam over the last 3 months, update `filter.lua`, and clean up the generated dump afterwards.
 
 ## Todo
 
@@ -16,7 +16,7 @@ Refresh the local mail dump, inspect recent inbox spam, update `filter.lua`, and
 
 2. Inspect recent mails in `output/INBOX`.
    Use file modification time as receive time.
-   Focus on the last 4 weeks.
+   Focus on the last 3 months.
 
 3. Identify spam that still lands in `INBOX`.
    Prefer durable patterns over one-off literals:

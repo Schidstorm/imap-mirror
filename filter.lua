@@ -84,6 +84,9 @@ local rejectSenders = {
     "postman.com",
     "news.paypal.com",
     "thegreatcourses.com",
+    "liolam.com",
+    "masagas.es",
+    "tphpd.com",
 }
 
 local rejectSendersRegex = {
