@@ -5,11 +5,12 @@ import (
 	"os"
 	"time"
 
-	"git.schidlow.ski/gitea/imap-mirror/pkg/cifs"
-	imap_backup "git.schidlow.ski/gitea/imap-mirror/pkg/imap-backup"
-	imapclient "git.schidlow.ski/gitea/imap-mirror/pkg/imap-client"
-	imap_filter "git.schidlow.ski/gitea/imap-mirror/pkg/imap-filter"
-	logger "git.schidlow.ski/gitea/imap-mirror/pkg/log"
+	filterscripts "github.com/Schidstorm/imap-mirror"
+	"github.com/Schidstorm/imap-mirror/pkg/cifs"
+	imap_backup "github.com/Schidstorm/imap-mirror/pkg/imap-backup"
+	imapclient "github.com/Schidstorm/imap-mirror/pkg/imap-client"
+	imap_filter "github.com/Schidstorm/imap-mirror/pkg/imap-filter"
+	logger "github.com/Schidstorm/imap-mirror/pkg/log"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
@@ -26,9 +27,8 @@ type Config struct {
 	BackupStateFile         string `json:"backupStateFile" yaml:"backupStateFile"`
 	FilterLastMessageOffset uint32 `json:"filterLastMessageOffset" yaml:"filterLastMessageOffset"`
 
-	CifsConfig      cifs.Config                 `json:",inline" yaml:",inline"`
-	BackupConfig    imap_backup.Config          `json:",inline" yaml:",inline"`
-	LuaFilterConfig imap_filter.LuaFilterConfig `json:",inline" yaml:",inline"`
+	CifsConfig   cifs.Config        `json:",inline" yaml:",inline"`
+	BackupConfig imap_backup.Config `json:",inline" yaml:",inline"`
 }
 
 func main() {
@@ -149,11 +149,7 @@ func runClient(cifsShare cifs.CifsShare, cfg Config) error {
 	log.Info("Running client")
 
 	filterClient := imap_filter.NewFilterClient(
-		imap_filter.NewLuaFilter(cfg.LuaFilterConfig, func(dir string) ([]string, error) {
-			return cifsShare.ListFiles(dir)
-		}, func(file string) (string, error) {
-			return cifsShare.ReadFile(file)
-		}),
+		imap_filter.NewLuaFilter(imap_filter.LuaFilterConfig{}, filterscripts.ListFiles, filterscripts.ReadFile),
 	)
 
 	backupClient := imap_backup.NewImapBackup(cifsShare, cfg.BackupConfig)

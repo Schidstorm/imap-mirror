@@ -3,19 +3,19 @@ package main
 import (
 	"os"
 
-	"git.schidlow.ski/gitea/imap-mirror/pkg/cifs"
-	imapclient "git.schidlow.ski/gitea/imap-mirror/pkg/imap-client"
-	imap_filter "git.schidlow.ski/gitea/imap-mirror/pkg/imap-filter"
-	logger "git.schidlow.ski/gitea/imap-mirror/pkg/log"
+	filterscripts "github.com/Schidstorm/imap-mirror"
+	"github.com/Schidstorm/imap-mirror/pkg/cifs"
+	imapclient "github.com/Schidstorm/imap-mirror/pkg/imap-client"
+	imap_filter "github.com/Schidstorm/imap-mirror/pkg/imap-filter"
+	logger "github.com/Schidstorm/imap-mirror/pkg/log"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 )
 
 type Config struct {
-	ClientConfig    imapclient.Config           `json:",inline" yaml:",inline"`
-	CifsConfig      cifs.Config                 `json:",inline" yaml:",inline"`
-	LuaFilterConfig imap_filter.LuaFilterConfig `json:",inline" yaml:",inline"`
+	ClientConfig imapclient.Config `json:",inline" yaml:",inline"`
+	CifsConfig   cifs.Config       `json:",inline" yaml:",inline"`
 }
 
 func main() {
@@ -50,11 +50,7 @@ func main() {
 			defer cifsShare.Close()
 
 			filterClient := imap_filter.NewFilterClient(
-				imap_filter.NewLuaFilter(cfg.LuaFilterConfig, func(dir string) ([]string, error) {
-					return cifsShare.ListFiles(dir)
-				}, func(file string) (string, error) {
-					return cifsShare.ReadFile(file)
-				}),
+				imap_filter.NewLuaFilter(imap_filter.LuaFilterConfig{}, filterscripts.ListFiles, filterscripts.ReadFile),
 			)
 
 			client := imapclient.NewClient(cifsShare, cfg.ClientConfig, []imapclient.HandleMessagePlugin{filterClient})
@@ -93,9 +89,6 @@ func main() {
 					CifsUsername: "user",
 					CifsPassword: "password",
 					CifsShare:    "share",
-				},
-				LuaFilterConfig: imap_filter.LuaFilterConfig{
-					ScriptsDir: "scripts",
 				},
 			}
 

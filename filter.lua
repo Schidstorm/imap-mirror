@@ -80,7 +80,8 @@ local rejectSenders = {
     "startnext.com",
     "1und1.de",
     "promotion",
-    "news2you.de"
+    "news2you.de",
+    "postman.com",
 }
 
 local rejectSendersRegex = {
@@ -95,7 +96,10 @@ local rejectSubjects = {
     "👍 ODER 👎",
     "👍 OR 👎",
     "Studentenangebot",
-    "[eE]xklusiv"
+    "[eE]xklusiv",
+    "Join me",
+    "Finanzierung",
+    "Pflege",
 }
 
 local function assertEqual(a, b)

@@ -3,10 +3,10 @@ package main
 import (
 	"os"
 
-	"git.schidlow.ski/gitea/imap-mirror/pkg/cifs"
-	imap_backup "git.schidlow.ski/gitea/imap-mirror/pkg/imap-backup"
-	imapclient "git.schidlow.ski/gitea/imap-mirror/pkg/imap-client"
-	logger "git.schidlow.ski/gitea/imap-mirror/pkg/log"
+	"github.com/Schidstorm/imap-mirror/pkg/cifs"
+	imap_backup "github.com/Schidstorm/imap-mirror/pkg/imap-backup"
+	imapclient "github.com/Schidstorm/imap-mirror/pkg/imap-client"
+	logger "github.com/Schidstorm/imap-mirror/pkg/log"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"

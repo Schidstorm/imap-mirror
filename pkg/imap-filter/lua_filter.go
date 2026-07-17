@@ -2,7 +2,6 @@ package imap_filter
 
 import (
 	"fmt"
-	"os"
 	"path"
 	"reflect"
 	"slices"
@@ -44,18 +43,13 @@ func (f *LuaFilter) Close() {
 }
 
 func (f *LuaFilter) Init() error {
-	files, err := os.ReadDir(f.scriptsDir)
+	files, err := f.lsFiles(f.scriptsDir)
 	if err != nil {
 		log.WithError(err).Error("failed to list files")
 		return nil
 	}
 
-	filePaths := make([]string, len(files))
-	for i, file := range files {
-		filePaths[i] = path.Join(f.scriptsDir, file.Name())
-	}
-
-	filePaths = filterStrings(filePaths, func(s string) bool {
+	filePaths := filterStrings(files, func(s string) bool {
 		return path.Ext(s) == ".lua"
 	})
 
@@ -63,13 +57,13 @@ func (f *LuaFilter) Init() error {
 	luaFiles := filePaths
 
 	for _, luaFile := range luaFiles {
-		luaFileContents, err := os.ReadFile(luaFile)
+		luaFileContents, err := f.readFile(luaFile)
 		if err != nil {
 			log.WithError(err).Errorf("failed to read file %s", luaFile)
 			continue
 		}
 
-		l, err := f.initLuaState(string(luaFileContents))
+		l, err := f.initLuaState(luaFileContents)
 		if err != nil {
 			log.WithError(err).Errorf("failed to init lua state for file %s", luaFile)
 			continue

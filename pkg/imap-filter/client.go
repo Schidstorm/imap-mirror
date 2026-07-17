@@ -5,7 +5,7 @@ import (
 	"slices"
 	"sync"
 
-	imap_client "git.schidlow.ski/gitea/imap-mirror/pkg/imap-client"
+	imap_client "github.com/Schidstorm/imap-mirror/pkg/imap-client"
 	"github.com/emersion/go-imap"
 	"github.com/sg3des/eml"
 	log "github.com/sirupsen/logrus"
