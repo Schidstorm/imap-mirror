@@ -82,6 +82,8 @@ local rejectSenders = {
     "promotion",
     "news2you.de",
     "postman.com",
+    "news.paypal.com",
+    "thegreatcourses.com",
 }
 
 local rejectSendersRegex = {
@@ -91,6 +93,12 @@ local rejectSendersRegex = {
 local rejectSubjects = {
     ".*news.*@.*",
     ".*Sichern +Sie +sich.*",
+    ".*Cloud Drive.*",
+    ".*WifiBoostPro.*",
+    ".*Einbruchschutz.*",
+    ".*digitales Leben.*",
+    ".*Lieblingsprodukte.*kostenlos.*",
+    ".*Preisvorteil exklusiv.*",
     "Diat",
     "[sS]ale",
     "👍 ODER 👎",
@@ -112,6 +120,10 @@ local function stringContains(str, substr)
     return string.find(str, substr, nil, true) ~= nil
 end
 
+local function stringMatches(str, pattern)
+    return string.match(str, pattern) ~= nil
+end
+
 function TestStringContains()
     assertEqual(stringContains("hello world", "world"), true)
     assertEqual(stringContains("hello world", "worlds"), false)
@@ -119,6 +131,12 @@ function TestStringContains()
     assertEqual(stringContains("hello world", "hell"), true)
     assertEqual(stringContains("hello world", ""), true)
     assertEqual(stringContains("", "world"), false)
+end
+
+function TestStringMatches()
+    assertEqual(stringMatches("Sichern Sie sich Ihre Mini-Überwachungskamera mit 50 % Rabatt", ".*Sichern +Sie +sich.*"), true)
+    assertEqual(stringMatches("Musik neu erleben - jetzt entdecken", ".*Lieblingsprodukte.*kostenlos.*"), false)
+    assertEqual(stringMatches("Important update regarding your Cloud Drive", ".*Cloud Drive.*"), true)
 end
 
 local function addressesContainsEmail(addrs, substr)
@@ -259,7 +277,7 @@ function Filter(subject, mailbox)
 
     -- REJECT by subject
     for _, sub in ipairs(rejectSubjects) do
-        if stringContains(subject.Subject, sub) then
+        if stringMatches(subject.Subject, sub) then
             print("FOUND IT! Rejecting mail (subject)")
             return reject()
         end
@@ -277,6 +295,14 @@ function TestFilter()
 
     assertEqual(Filter(subject, "INBOX").kind, "delete")
     assertEqual(Filter(subject, "INBOX.Rechnungen").kind, "noop")
+
+    local spamSubject = {
+        From = { { Email="offers@example.com" } },
+        Sender = { },
+        Subject = "Sichern Sie sich Ihre Mini-Überwachungskamera mit 50 % Rabatt",
+    }
+
+    assertEqual(Filter(spamSubject, "INBOX").kind, "delete")
 
 end
 

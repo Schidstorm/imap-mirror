@@ -23,7 +23,6 @@ type Config struct {
 	ImapAddr     string `json:"imapAddr" yaml:"imapAddr"`
 	ImapUsername string `json:"imapUsername" yaml:"imapUsername"`
 	ImapPassword string `json:"imapPassword" yaml:"imapPassword"`
-	BackupDir    string `json:"backupDir" yaml:"backupDir"`
 }
 
 type LocalFS struct{}
@@ -73,12 +72,18 @@ func main() {
 				return err
 			}
 
-			return runDump(cfg)
+			outputDir, err := cmd.Flags().GetString("output-dir")
+			if err != nil {
+				return err
+			}
+
+			return runDump(cfg, outputDir)
 		},
 	}
 
 	flags := root.PersistentFlags()
 	flags.String("config.file", "config.yml", "config file path")
+	flags.String("output-dir", "dump", "local output directory for dumped .eml files")
 
 	root.AddCommand(&cobra.Command{
 		Use:   "config-structure",
@@ -88,7 +93,6 @@ func main() {
 				ImapAddr:     "imap.example.com:993",
 				ImapUsername: "user",
 				ImapPassword: "password",
-				BackupDir:    "dump",
 			}
 
 			configBytes, err := yaml.Marshal(config)
@@ -121,18 +125,17 @@ func loadConfig(configFilePath string) (Config, error) {
 		return Config{}, fmt.Errorf("imapAddr, imapUsername and imapPassword are required")
 	}
 
-	if cfg.BackupDir == "" {
-		return Config{}, fmt.Errorf("backupDir is required")
-	}
-
-	cfg.BackupDir = filepath.Clean(cfg.BackupDir)
-
 	return cfg, nil
 }
 
-func runDump(cfg Config) error {
+func runDump(cfg Config, outputDir string) error {
+	outputDir = filepath.Clean(outputDir)
+	if outputDir == "" || outputDir == "." {
+		return fmt.Errorf("output-dir is required")
+	}
+
 	backupFS := LocalFS{}
-	backupClient := imap_backup.NewImapBackup(backupFS, imap_backup.Config{BackupDir: cfg.BackupDir})
+	backupClient := imap_backup.NewImapBackup(backupFS, imap_backup.Config{BackupDir: outputDir})
 
 	conn := imapclient.NewConnection(imapclient.ConnectionParams{
 		ImapAddr:     cfg.ImapAddr,

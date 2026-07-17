@@ -2,5 +2,6 @@
 /.idea
 /necromant_imap_mirror.tar
 /cmd/temp
+/output/
 
 docker-compose.yml
