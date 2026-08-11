@@ -1,0 +1,14 @@
+imapAddr: "imap.strato.de:993"
+imapUsername: "dominik@schidlowski.eu"
+imapPassword: "{{ env "IMAP_PASSWORD" }}"
+stateDir: ""
+cifsAddr: "192.168.1.155:445"
+cifsUsername: "backupper"
+cifsPassword: "{{ env "CIFS_PASSWORD" }}"
+cifsShare: "backup"
+backupDir: "email"
+backupStateFile: "email/.state.json"
+filterStateFile: "filter/.state.json"
+scriptsDir: "filter/scripts"
+lastMessageOffset: 0
+runPeriode: 12h

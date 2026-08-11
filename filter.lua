@@ -87,6 +87,14 @@ local rejectSenders = {
     "liolam.com",
     "masagas.es",
     "tphpd.com",
+    "facebookmail.com",
+    "career",
+    "recruiting",
+    "hiring",
+    "jobboard",
+    "jobalert",
+    "job-opportunity",
+    "careers",
 }
 
 local rejectSendersRegex = {
@@ -102,6 +110,19 @@ local rejectSubjects = {
     ".*digitales Leben.*",
     ".*Lieblingsprodukte.*kostenlos.*",
     ".*Preisvorteil exklusiv.*",
+    ".*Abridged.*",
+    ".*summary.*",
+    ".*paper.*",
+    ".*papers.*",
+    ".*newsletter.*",
+    ".*news.*",
+    ".*job.*",
+    ".*jobs.*",
+    ".*career.*",
+    ".*careers.*",
+    ".*hiring.*",
+    ".*recruit.*",
+    ".*vacancy.*",
     "Diat",
     "[sS]ale",
     "👍 ODER 👎",
@@ -111,6 +132,10 @@ local rejectSubjects = {
     "Join me",
     "Finanzierung",
     "Pflege",
+    ".*Facebook-Code.*",
+    ".*Facebook code.*",
+    ".*dein Facebook-Code.*",
+    ".*facebook-code.*",
 }
 
 local function assertEqual(a, b)
@@ -307,6 +332,36 @@ function TestFilter()
 
     assertEqual(Filter(spamSubject, "INBOX").kind, "delete")
 
+end
+
+function TestFacebookMailSpam()
+    local facebookSubject = {
+        From = { { Email="security@facebookmail.com" } },
+        Sender = { },
+        Subject = "205880 ist dein Facebook-Code.",
+    }
+
+    assertEqual(Filter(facebookSubject, "INBOX").kind, "delete")
+end
+
+function TestGenericNewsletterSpam()
+    local newsletterSubject = {
+        From = { { Email="marketing@example.com" } },
+        Sender = { },
+        Subject = "Abridged summary of your weekly updates",
+    }
+
+    assertEqual(Filter(newsletterSubject, "INBOX").kind, "delete")
+end
+
+function TestLegitimateFacebookSubject()
+    local legitimateSubject = {
+        From = { { Email="facebook.com" } },
+        Sender = { },
+        Subject = "Your Facebook account update",
+    }
+
+    assertEqual(Filter(legitimateSubject, "INBOX").kind, "noop")
 end
 
 function SelectMailboxes()

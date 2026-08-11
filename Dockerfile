@@ -11,5 +11,9 @@ RUN useradd --system --home /home/mirror_filter --user-group mirror_filter
 USER mirror_filter
 WORKDIR /home/mirror_filter
 
+RUN mkdir -p /home/mirror_filter/filter
+COPY filter.lua /home/mirror_filter/filter/filter.lua
+COPY config.template.yml /home/mirror_filter/config.yml
+
 ENTRYPOINT ["/usr/local/bin/mirror_filter"]
 
