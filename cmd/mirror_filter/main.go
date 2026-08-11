@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"text/template"
 	"time"
 
 	filterscripts "github.com/Schidstorm/imap-mirror"
@@ -107,8 +109,22 @@ func loadConfig(configFilePath string) (Config, error) {
 		return Config{}, err
 	}
 
+	tpl := template.New("config.yaml")
+	tpl.Funcs(template.FuncMap{
+		"env": func(name string) string {
+			return os.Getenv(name)
+		},
+	})
+	if _, err := tpl.Parse(string(configFileBytes)); err != nil {
+		return Config{}, err
+	}
+	outputBuffer := new(bytes.Buffer)
+	if err := tpl.Execute(outputBuffer, nil); err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{}
-	err = yaml.Unmarshal(configFileBytes, &cfg)
+	err = yaml.Unmarshal(outputBuffer.Bytes(), &cfg)
 	if err != nil {
 		return Config{}, err
 	}

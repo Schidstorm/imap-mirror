@@ -23,6 +23,7 @@ Refresh the local mail dump, inspect inbox spam over the last 3 months, update `
    - sender domains or sender substrings for `rejectSenders`
    - sender regexes for `rejectSendersRegex`
    - subject patterns for `rejectSubjects`
+   - focus on broad newsletter, job, paper/summary, and marketing spam, but keep the rules narrow enough to avoid blocking legitimate mail such as normal Facebook/Spotify sign-in messages
 
 4. Update `filter.lua`.
    Keep changes minimal and targeted.
@@ -45,3 +46,4 @@ Refresh the local mail dump, inspect inbox spam over the last 3 months, update `
 - `rejectSubjects` uses Lua string patterns and is matched with `string.match`.
 - Check mail headers first: `From`, `Sender`, `Return-Path`, `Reply-To`, and `Subject`.
 - Avoid filtering only on cosmetic display names when the real sender domain is available.
+- For Facebook-related mail, prefer matching explicit code-spam subjects such as `Facebook-Code` instead of blocking all Facebook traffic.

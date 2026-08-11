@@ -1,22 +1,21 @@
-version = 1.1.2
+version = 1.1.6
 
 define smb
 	smbclient //$(shell yq -r '.cifsAddr' config.yml | cut -d: -f1)/$(1) --password "${SMB_PASSWORD}" -U "user" -c "$(2)"
 endef
 
-all: build copy
+all: build push
 
 build:
 	docker build -t necromant/imap_mirror:$(version) .
 
-copy: test docker_compose_yml config_yml 
+push:
+	docker push necromant/imap_mirror:$(version)
+
+copy: test config_yml 
 
 test:
 	go run ./cmd/test/
-
-docker_compose_yml: check_env
-	( rm docker-compose.yml || true ) && sed "s/VERSION/$(version)/g" docker-compose.template.yml > docker-compose.yml && \
-	$(call smb,docker,put docker-compose.yml projects\\imap_mirror\\docker-compose.yml)
 
 config_yml: check_env
 	$(call smb,docker,put config.yml projects\\imap_mirror\\email_backup_config.yml)
