@@ -4,7 +4,7 @@ kind: Application
 metadata:
   name: imap-mirror
 spec:
-  image: registry.schidlow.ski/imap_mirror:1.1.6
+  image: registry.schidlow.ski/imap_mirror:${VERSION}
   secret:
     IMAP_PASSWORD: email/dominik@schidlowski.eu/password
     CIFS_PASSWORD: backup/password
