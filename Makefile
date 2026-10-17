@@ -7,10 +7,10 @@ endef
 all: build push
 
 build:
-	docker build -t necromant/imap_mirror:$(version) .
+	docker build -t registry.schidlow.ski/imap_mirror:$(version) .
 
 push:
-	docker push necromant/imap_mirror:$(version)
+	docker push registry.schidlow.ski/imap_mirror:$(version)
 
 copy: test config_yml 
 

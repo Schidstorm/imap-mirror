@@ -1,0 +1,10 @@
+
+apiVersion: home.schidlow.ski/v1
+kind: Application
+metadata:
+  name: imap-mirror
+spec:
+  image: registry.schidlow.ski/imap_mirror:1.1.6
+  secret:
+    IMAP_PASSWORD: email/dominik@schidlowski.eu/password
+    CIFS_PASSWORD: backup/password
